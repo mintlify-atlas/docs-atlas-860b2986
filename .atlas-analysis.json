@@ -1,0 +1,103 @@
+{
+  "projectType": "saas",
+  "projectName": "PAE Inventory System",
+  "projectDescription": "School food program inventory management system for Escuela Nacional Maestro Carlos González",
+  "theme": "almond",
+  "primaryColor": "#2563eb",
+  "lightColor": "#60a5fa",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/dashboard",
+              "features/inventory-management",
+              "features/entry-guides",
+              "features/daily-operations",
+              "features/reports"
+            ]
+          },
+          {
+            "group": "User Guides",
+            "pages": [
+              "guides/user-roles",
+              "guides/managing-products",
+              "guides/entry-approval-workflow",
+              "guides/daily-attendance",
+              "guides/portion-management",
+              "guides/fifo-system"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "admin/user-management",
+              "admin/audit-logs",
+              "admin/school-info"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Database",
+        "groups": [
+          {
+            "group": "Schema",
+            "pages": [
+              "database/overview",
+              "database/tables",
+              "database/functions",
+              "database/security"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "database/rpc-functions",
+              "database/views",
+              "database/triggers"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Role-based access control with hierarchical permissions",
+    "Maker-checker approval workflow for inventory entries",
+    "FIFO-based batch tracking with expiration dates",
+    "Daily attendance and meal planning",
+    "Real-time inventory stock monitoring",
+    "Comprehensive audit logging",
+    "Portion yield management",
+    "Supabase authentication and PostgreSQL backend"
+  ],
+  "publicApiSurface": [
+    "aprobar_guia(p_id_guia, p_comentarios)",
+    "rechazar_guia(p_id_guia, p_motivo)",
+    "get_lotes_por_vencer(p_dias)",
+    "procesar_operacion_diaria(p_fecha, p_turno, p_asistencia, p_rubros)",
+    "/login - User authentication",
+    "/productos - Inventory management",
+    "/guias-entrada - Entry guide creation",
+    "/aprobar-guias - Entry guide approval (Director only)",
+    "/registro-diario - Daily operations",
+    "/porciones - Portion yield configuration",
+    "/reportes - Reports and analytics",
+    "/auditoria - Audit log viewer",
+    "/usuarios - User management (Director only)",
+    "/datos-plantel - School information"
+  ]
+}
