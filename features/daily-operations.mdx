@@ -1,0 +1,363 @@
+---
+title: Daily Operations
+description: Register daily attendance and automatically calculate ingredient consumption using FIFO
+icon: 'utensils'
+---
+
+The Daily Operations module streamlines the process of recording daily meal service. It combines attendance tracking with automatic inventory consumption using portion recipes and FIFO (First In, First Out) batch depletion.
+
+## Overview
+
+Each daily operation records:
+- **Date** and **meal shift** (Desayuno, Almuerzo, Merienda)
+- **Student attendance count**
+- **Products cooked** for the meal
+
+<Info>
+  **Automatic calculation**: The system calculates how much of each ingredient to deduct based on attendance and portion recipes, then deducts from the oldest batches first (FIFO).
+</Info>
+
+## Creating a Daily Operation
+
+### Step 1: Basic Information
+
+<ParamField path="fecha" type="date" required>
+  Date of the operation
+  
+  **Default**: Current date using `getLocalDate()`
+</ParamField>
+
+<ParamField path="turno" type="select" required>
+  Meal shift:
+  - `Desayuno` - Breakfast
+  - `Almuerzo` - Lunch
+  - `Merienda` - Snack
+  
+  **Constraint**: Each `(fecha, turno)` combination must be unique
+</ParamField>
+
+<ParamField path="asistencia_total" type="integer" required>
+  Number of students attending
+  
+  **Example**: 774
+  
+  **Minimum**: 1
+</ParamField>
+
+### Step 2: Select Products to Cook
+
+Click **"+ Agregar Rubro"** to add products used in the meal.
+
+<Warning>
+  **Portion recipe required**: Only products configured in `receta_porcion` (portion recipes) can be selected. Products without `rendimiento_por_unidad` cannot be added to daily operations.
+</Warning>
+
+#### Product Selection
+
+For each product row:
+
+- **Dropdown**: Shows products with portion recipes, displaying current stock
+- **Validation**: Cannot select the same product twice
+- **Live calculation**: Shows required quantity based on attendance
+
+#### Quantity Calculation
+
+The system calculates required amount automatically:
+
+```javascript
+const cantidad = asistencia_total / rendimiento_por_unidad
+```
+
+**Example**:
+- Product: Arroz (Rice)
+- Rendimiento: 12 porciones por kg (12 portions per kg)
+- Attendance: 774 students
+- **Calculation**: 774 / 12 = **64.50 kg needed**
+
+#### Stock Validation
+
+Each product row shows:
+
+<CardGroup cols={2}>
+  <Card title="✅ Sufficient Stock" icon="check" color="#059669">
+    **Green indicator**: "64.50 kg necesarios"
+    
+    Stock is adequate to fulfill the order
+  </Card>
+  <Card title="⚠️ Insufficient Stock" icon="triangle-exclamation" color="#dc2626">
+    **Red indicator**: "64.50 kg necesarios (stock: 30.00)"
+    
+    Not enough inventory - operation will fail
+  </Card>
+</CardGroup>
+
+### Step 3: Submit Operation
+
+Click **"Registrar Operación"** to process.
+
+## Processing Logic (FIFO)
+
+When submitted, the system calls the `procesar_operacion_diaria` RPC function (`supabase_schema.sql:571-706`):
+
+<Steps>
+  <Step title="Create registro_diario Record">
+    Inserts the daily operation record:
+    ```sql
+    INSERT INTO registro_diario (fecha, turno, asistencia_total, created_by)
+    VALUES (p_fecha, p_turno, p_asistencia, auth.uid())
+    ```
+  </Step>
+  
+  <Step title="Calculate Required Quantities">
+    For each product:
+    ```javascript
+    const rendimiento = receta_porcion.rendimiento_por_unidad
+    const cantidad_necesaria = asistencia / rendimiento
+    ```
+  </Step>
+  
+  <Step title="FIFO Batch Consumption">
+    The function queries all approved batches for the product, ordered by expiration date (oldest first):
+    
+    ```sql
+    SELECT cantidad_lote, fecha_vencimiento
+    FROM input i
+    JOIN guia_entrada g ON i.id_guia = g.id_guia
+    WHERE i.id_product = v_rubro_id
+      AND g.estado = 'Aprobada'
+      AND lotes_detalle IS NOT NULL
+    ORDER BY fecha_vencimiento ASC
+    ```
+    
+    Then consumes from batches sequentially:
+    
+    ```javascript
+    while (cantidad_restante > 0) {
+      const consumir = Math.min(cantidad_lote, cantidad_restante)
+      
+      // Update batch quantity in JSONB
+      UPDATE input SET lotes_detalle[idx].cantidad -= consumir
+      
+      cantidad_restante -= consumir
+    }
+    ```
+  </Step>
+  
+  <Step title="Deduct from Product Stock">
+    Creates an `output` record which triggers the `update_stock_on_output` trigger:
+    
+    ```sql
+    INSERT INTO output (id_product, amount, fecha, motivo, id_registro)
+    VALUES (rubro_id, cantidad_necesaria, fecha, 'Almuerzo - 774 alumnos', registro_id)
+    
+    -- Trigger executes:
+    UPDATE product SET stock = stock - cantidad_necesaria
+    WHERE id_product = rubro_id
+    ```
+  </Step>
+  
+  <Step title="Log to Audit">
+    Records the operation in `audit_log` with details about products and quantities
+  </Step>
+</Steps>
+
+### Error Handling
+
+<Warning>
+  **Insufficient batches**: If FIFO consumption can't fulfill the required quantity:
+  
+  ```
+  Error: Lotes insuficientes para "Arroz". Faltan 15.50 unidades.
+  ```
+  
+  The entire transaction is rolled back - no changes are saved.
+</Warning>
+
+<Warning>
+  **No portion recipe**: If a product has no `rendimiento_por_unidad` configured:
+  
+  ```
+  Error: El rubro "Aceite" no tiene rendimiento configurado.
+  ```
+</Warning>
+
+## Viewing Operations History
+
+The page shows the 50 most recent operations in a table.
+
+### Table Columns
+
+| Column | Description | Data |
+|--------|-------------|------|
+| **Fecha** | Operation date | `registro_diario.fecha` |
+| **Turno** | Meal shift badge | Desayuno / Almuerzo / Merienda |
+| **Asistencia** | Student count | "774 alumnos" |
+| **Registrado por** | User who created | `users.full_name` (joined) |
+| **Notas** | Optional notes | `registro_diario.notas` |
+| **Detalle** | Expand/collapse button | Shows products consumed |
+
+### Expandable Details
+
+Click **"▼ Ver rubros"** to expand and see consumed products:
+
+```
+Rubro               Cantidad descontada    Motivo
+Arroz               64.50 kg              Almuerzo - 774 alumnos
+Caraotas negras     77.40 kg              Almuerzo - 774 alumnos
+Pollo               193.50 kg             Almuerzo - 774 alumnos
+```
+
+Data is loaded on-demand from the `output` table:
+
+```sql
+SELECT output.*, product.product_name, product.unit_measure
+FROM output
+WHERE id_registro = registro_id
+ORDER BY id_output
+```
+
+## Data Structure
+
+### registro_diario Table
+
+```sql
+CREATE TABLE registro_diario (
+  id_registro SERIAL PRIMARY KEY,
+  fecha DATE NOT NULL,
+  turno TEXT NOT NULL CHECK (turno IN ('Desayuno', 'Almuerzo', 'Merienda')),
+  asistencia_total INTEGER NOT NULL CHECK (asistencia_total >= 0),
+  notas TEXT,
+  created_by UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(fecha, turno)
+);
+```
+
+### output Table (Linked Details)
+
+```sql
+CREATE TABLE output (
+  id_output SERIAL PRIMARY KEY,
+  id_product INTEGER REFERENCES product(id_product),
+  amount NUMERIC(10,2) NOT NULL,
+  fecha DATE,
+  motivo TEXT,  -- e.g., "Almuerzo - 774 alumnos"
+  id_registro INTEGER REFERENCES registro_diario(id_registro),
+  created_by UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+<Info>
+  **Trigger on output**: Inserting into `output` automatically triggers `update_stock_on_output()` which deducts from `product.stock` and validates availability.
+</Info>
+
+### receta_porcion Table
+
+```sql
+CREATE TABLE receta_porcion (
+  id_porcion SERIAL PRIMARY KEY,
+  id_product INTEGER REFERENCES product(id_product) UNIQUE,
+  rendimiento_por_unidad NUMERIC(10,2) NOT NULL DEFAULT 1.0,
+  unit_measure TEXT NOT NULL,
+  notas TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Example data**:
+
+| id_product | Product Name | rendimiento_por_unidad | unit_measure |
+|------------|--------------|------------------------|---------------|
+| 1 | Arroz | 12.00 | kg |
+| 3 | Leche en polvo | 40.00 | kg |
+| 4 | Pollo | 4.00 | kg |
+| 5 | Caraotas negras | 10.00 | kg |
+
+**Interpretation**: 
+- 1 kg of rice yields 12 portions
+- 1 kg of powdered milk yields 40 portions
+- 1 kg of chicken yields 4 portions
+
+## Role-Based Access
+
+| Role | Create Operations | View History |
+|------|-------------------|-------------|
+| **Director** (id_rol=1) | ✅ | ✅ |
+| **Madre Procesadora** (id_rol=2) | ✅ | ✅ |
+| **Supervisor** (id_rol=3) | ❌ | ✅ |
+| **Desarrollador** (id_rol=4) | ✅ | ✅ |
+
+## FIFO Batch Tracking
+
+The FIFO implementation uses the `lotes_detalle` JSONB field in the `input` table.
+
+### Before Operation
+
+**Product**: Arroz (Rice)  
+**Stock**: 150 kg
+
+**Batches**:
+
+| id_input | Guía | Batch Data (JSONB) |
+|----------|------|--------------------|
+| 101 | 89 | `[{"cantidad": 50, "fecha_vencimiento": "2026-06-30"}]` |
+| 102 | 90 | `[{"cantidad": 60, "fecha_vencimiento": "2026-09-15"}, {"cantidad": 40, "fecha_vencimiento": "2026-12-31"}]` |
+
+### After Operation (64.50 kg consumed)
+
+FIFO consumes oldest first:
+
+1. **Batch from id_input=101**: Expires 2026-06-30 → Consume 50 kg
+2. **Batch from id_input=102**: Expires 2026-09-15 → Consume 14.50 kg
+
+**Updated batches**:
+
+| id_input | Batch Data (JSONB) |
+|----------|-----------------------|
+| 101 | `[{"cantidad": 0, "fecha_vencimiento": "2026-06-30"}]` |
+| 102 | `[{"cantidad": 45.50, "fecha_vencimiento": "2026-09-15"}, {"cantidad": 40, "fecha_vencimiento": "2026-12-31"}]` |
+
+**Product stock**: 150 - 64.50 = **85.50 kg**
+
+<Tip>
+  Batches with `cantidad = 0` remain in the database for audit trail but are skipped in future FIFO queries.
+</Tip>
+
+## Technical Details
+
+<Info>
+  **File location**: `src/pages/RegistroDiario.jsx:1-407`
+</Info>
+
+### Key Functions
+
+- **loadRegistros()**: Fetches last 50 operations with creator info
+- **loadProductosConRendimiento()**: Gets products that have portion recipes configured
+- **loadDetallesRegistro()**: On-demand fetch of consumed products when expanding a row
+- **getCalculoRubro()**: Real-time calculation of required quantity based on attendance
+- **handleSubmit()**: Calls `procesar_operacion_diaria` RPC
+
+### Form Validation
+
+- Prevents duplicate product selection
+- Requires at least one product
+- Shows live stock availability warnings
+- Validates that portion recipes exist
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Daily Meal Tracking" icon="calendar-check">
+    Record each meal service with accurate attendance and ingredient usage
+  </Card>
+  <Card title="FIFO Compliance" icon="arrow-right-arrow-left">
+    Automatically consume oldest batches first to minimize food waste
+  </Card>
+  <Card title="Inventory Accuracy" icon="chart-line">
+    Real-time stock deduction ensures inventory data reflects actual usage
+  </Card>
+  <Card title="Audit Trail" icon="list-check">
+    Complete history of all operations with expandable details for transparency
+  </Card>
+</CardGroup>

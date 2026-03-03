@@ -1,0 +1,138 @@
+---
+title: Dashboard
+description: Real-time overview of inventory metrics and system activity
+icon: 'gauge'
+---
+
+The Dashboard provides a comprehensive real-time view of your school food program inventory system. It displays key metrics, alerts, and recent activity at a glance.
+
+## Key Metrics
+
+The dashboard displays four essential statistics cards:
+
+### Total de Rubros (Total Products)
+
+Shows the total count of product items (rubros) registered in the system.
+
+- **Data source**: `product` table count
+- **Icon**: Package icon with blue accent
+- **Updates**: Real-time on page load
+
+### Stock Bajo (Low Stock)
+
+Highlights products with critically low inventory levels.
+
+- **Threshold**: Products with less than 10 units
+- **Query**: `stock < 10` from `product` table
+- **Visual**: Amber warning badge
+- **Details**: Shows count with helper text "Rubros con menos de 10 unidades"
+
+### Lotes por Vencer (Expiring Batches)
+
+Displays batches approaching their expiration date.
+
+- **Timeframe**: Next 30 days
+- **Function**: Uses `get_lotes_por_vencer(30)` RPC function
+- **Data**: Pulled from `input.lotes_detalle` JSONB field
+- **Visual**: Red alert indicator
+- **Purpose**: Prevents food waste and ensures food safety
+
+### Asistencia Hoy (Today's Attendance)
+
+Shows the total number of students registered for today.
+
+- **Source**: `asistencia_diaria` table filtered by today's date
+- **Field**: `total_alumnos`
+- **Status**: Displays "Sin registro" if no attendance recorded yet
+- **Visual**: Green emerald accent
+
+## Recent Activity Feed
+
+The dashboard includes an audit log table showing the last 10 system actions:
+
+### Activity Fields
+
+<CardGroup cols={2}>
+  <Card title="Usuario" icon="user">
+    Full name of the user who performed the action, pulled from `users.full_name`
+  </Card>
+  <Card title="Acción" icon="bolt">
+    Action type with color-coded badges:
+    - **INSERT** (green): New record created
+    - **UPDATE** (amber): Record modified
+    - **APPROVE** (green): Entry guide approved
+    - **REJECT** (red): Entry guide rejected
+    - **DELETE** (red): Record removed
+  </Card>
+  <Card title="Tabla" icon="table">
+    The database table affected by the action (e.g., `product`, `guia_entrada`, `input`)
+  </Card>
+  <Card title="Fecha" icon="calendar">
+    Timestamp formatted in Venezuelan locale (es-VE)
+  </Card>
+</CardGroup>
+
+### Data Source
+
+Activity feed queries the `audit_log` table:
+
+```sql
+SELECT * FROM audit_log
+ORDER BY timestamp DESC
+LIMIT 10
+```
+
+User details are joined from the `users` table using `id_user` foreign key.
+
+## Loading States
+
+The dashboard implements a global loader while fetching data:
+
+- **Component**: `<GlobalLoader text="Cargando dashboard..." />`
+- **Trigger**: Shows until all dashboard queries complete
+- **Data sources loaded**:
+  - Total products count
+  - Low stock count
+  - Expiring batches RPC
+  - Today's attendance
+  - Recent activity with user joins
+
+## Technical Details
+
+<Info>
+  **File location**: `src/pages/Dashboard.jsx:6-174`
+</Info>
+
+### Database Queries
+
+The dashboard executes five parallel queries on load:
+
+1. **Total products**: `supabase.from('product').select('*', { count: 'exact', head: true })`
+2. **Low stock**: Same query with `.lt('stock', 10)`
+3. **Expiring batches**: `supabase.rpc('get_lotes_por_vencer', { p_dias: 30 })`
+4. **Today's attendance**: `supabase.from('asistencia_diaria').select('total_alumnos').eq('fecha', today).maybeSingle()`
+5. **Activity log**: `supabase.from('audit_log').select('*').order('timestamp', { ascending: false }).limit(10)`
+
+### Error Handling
+
+- Uses `.maybeSingle()` for attendance to handle missing data gracefully
+- Falls back to 0 for all metrics if queries fail
+- Console logs errors for debugging
+- No error thrown if no attendance record exists for today
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Daily Health Check" icon="heart-pulse">
+    Directors and staff can quickly assess inventory health before the school day starts
+  </Card>
+  <Card title="Proactive Alerts" icon="bell">
+    Low stock and expiring batch warnings enable timely reordering and consumption planning
+  </Card>
+  <Card title="Audit Trail" icon="shield-check">
+    Recent activity provides accountability and helps track who made changes to the system
+  </Card>
+  <Card title="Attendance Tracking" icon="users">
+    Quick view of today's student count helps kitchen staff plan meal portions
+  </Card>
+</CardGroup>

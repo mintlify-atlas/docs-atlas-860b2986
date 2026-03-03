@@ -1,0 +1,423 @@
+---
+title: Audit Logs
+description: System-wide audit trail for tracking all data modifications
+icon: file-text
+---
+
+## Overview
+
+The Audit Log system (`AuditLog.jsx` and database triggers) provides complete tracking of all INSERT, UPDATE, DELETE, APPROVE, and REJECT operations across the inventory system. Every modification is logged with user information, timestamps, and change details.
+
+## Audit Log Table Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS audit_log (
+    id_log SERIAL PRIMARY KEY,
+    id_user UUID REFERENCES auth.users(id),
+    action_type TEXT NOT NULL, -- INSERT, UPDATE, DELETE, APPROVE, REJECT
+    table_affected TEXT,
+    record_id INTEGER,
+    details TEXT,
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    ip_address TEXT
+);
+```
+
+## Tracked Actions
+
+The system tracks the following action types:
+
+### Standard Operations
+
+- **INSERT** - New record creation
+- **UPDATE** - Existing record modification
+- **DELETE** - Record deletion
+
+### Workflow Operations
+
+- **APPROVE** - Guía de entrada approval (Director only)
+- **REJECT** - Guía de entrada rejection (Director only)
+
+## Automatic Audit Logging
+
+### Generic Audit Function
+
+The `log_audit()` function automatically logs changes to critical tables:
+
+```sql
+CREATE OR REPLACE FUNCTION log_audit()
+RETURNS TRIGGER AS $$
+DECLARE
+    record_id_value INTEGER;
+BEGIN
+    record_id_value := NULL;
+
+    IF (TG_OP = 'INSERT') THEN
+        BEGIN
+            IF TG_TABLE_NAME = 'product' THEN
+                record_id_value := NEW.id_product;
+            ELSIF TG_TABLE_NAME = 'guia_entrada' THEN
+                record_id_value := NEW.id_guia;
+            ELSIF TG_TABLE_NAME = 'menu_diario' THEN
+                record_id_value := NEW.id_menu;
+            ELSIF TG_TABLE_NAME = 'output' THEN
+                record_id_value := NEW.id_output;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            record_id_value := NULL;
+        END;
+
+        INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+        VALUES (auth.uid(), 'INSERT', TG_TABLE_NAME, record_id_value, row_to_json(NEW)::text);
+        RETURN NEW;
+
+    ELSIF (TG_OP = 'UPDATE') THEN
+        BEGIN
+            IF TG_TABLE_NAME = 'product' THEN
+                record_id_value := NEW.id_product;
+            ELSIF TG_TABLE_NAME = 'guia_entrada' THEN
+                record_id_value := NEW.id_guia;
+            ELSIF TG_TABLE_NAME = 'menu_diario' THEN
+                record_id_value := NEW.id_menu;
+            ELSIF TG_TABLE_NAME = 'output' THEN
+                record_id_value := NEW.id_output;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            record_id_value := NULL;
+        END;
+
+        INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+        VALUES (auth.uid(), 'UPDATE', TG_TABLE_NAME, record_id_value,
+            'Antes: ' || row_to_json(OLD)::text || ' | Despues: ' || row_to_json(NEW)::text);
+        RETURN NEW;
+
+    ELSIF (TG_OP = 'DELETE') THEN
+        BEGIN
+            IF TG_TABLE_NAME = 'product' THEN
+                record_id_value := OLD.id_product;
+            ELSIF TG_TABLE_NAME = 'guia_entrada' THEN
+                record_id_value := OLD.id_guia;
+            ELSIF TG_TABLE_NAME = 'menu_diario' THEN
+                record_id_value := OLD.id_menu;
+            ELSIF TG_TABLE_NAME = 'output' THEN
+                record_id_value := OLD.id_output;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            record_id_value := NULL;
+        END;
+
+        INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+        VALUES (auth.uid(), 'DELETE', TG_TABLE_NAME, record_id_value, row_to_json(OLD)::text);
+        RETURN OLD;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+### Audited Tables
+
+Triggers are applied to these critical tables:
+
+```sql
+DROP TRIGGER IF EXISTS audit_product ON product;
+CREATE TRIGGER audit_product AFTER INSERT OR UPDATE OR DELETE ON product
+    FOR EACH ROW EXECUTE FUNCTION log_audit();
+
+DROP TRIGGER IF EXISTS audit_guia ON guia_entrada;
+CREATE TRIGGER audit_guia AFTER INSERT OR UPDATE OR DELETE ON guia_entrada
+    FOR EACH ROW EXECUTE FUNCTION log_audit();
+
+DROP TRIGGER IF EXISTS audit_menu ON menu_diario;
+CREATE TRIGGER audit_menu AFTER INSERT OR UPDATE OR DELETE ON menu_diario
+    FOR EACH ROW EXECUTE FUNCTION log_audit();
+
+DROP TRIGGER IF EXISTS audit_output ON output;
+CREATE TRIGGER audit_output AFTER INSERT OR UPDATE OR DELETE ON output
+    FOR EACH ROW EXECUTE FUNCTION log_audit();
+```
+
+## Special Actions: APPROVE and REJECT
+
+### Approval Audit Entry
+
+When a guía is approved using the `aprobar_guia` RPC function:
+
+```sql
+INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+VALUES (auth.uid(), 'APPROVE', 'guia_entrada', p_id_guia,
+  jsonb_build_object(
+    'numero_guia', v_guia_info.numero_guia_sunagro,
+    'productos_procesados', v_total_productos,
+    'comentarios', p_comentarios
+  )::text
+);
+```
+
+### Rejection Audit Entry
+
+When a guía is rejected using the `rechazar_guia` RPC function:
+
+```sql
+INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+VALUES (auth.uid(), 'REJECT', 'guia_entrada', p_id_guia,
+  jsonb_build_object(
+    'numero_guia', v_guia_info.numero_guia_sunagro,
+    'motivo', p_motivo
+  )::text
+);
+```
+
+<Warning>
+  APPROVE and REJECT actions are **Director-only operations** (roles 1 and 4). They include additional metadata like approval comments and rejection reasons.
+</Warning>
+
+## Viewing Audit Logs
+
+### Component Loading
+
+The `AuditLog.jsx` component loads logs with filters:
+
+```jsx
+const loadLogs = async () => {
+  setLoading(true)
+  try {
+    let query = supabase
+      .from('audit_log')
+      .select('*')
+      .gte('timestamp', filters.desde + 'T00:00:00')
+      .lte('timestamp', filters.hasta + 'T23:59:59')
+      .order('timestamp', { ascending: false })
+      .limit(100)
+
+    if (filters.action_type) {
+      query = query.eq('action_type', filters.action_type)
+    }
+
+    if (filters.table_affected) {
+      query = query.eq('table_affected', filters.table_affected)
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+    
+    // Load user information separately
+    if (data && data.length > 0) {
+      const userIds = [...new Set(data.map(log => log.id_user).filter(Boolean))]
+      
+      if (userIds.length > 0) {
+        const { data: usersData } = await supabase
+          .from('users')
+          .select('id_user, full_name, username')
+          .in('id_user', userIds)
+        
+        const usersMap = {}
+        usersData?.forEach(user => {
+          usersMap[user.id_user] = user
+        })
+        
+        const logsWithUsers = data.map(log => ({
+          ...log,
+          users: usersMap[log.id_user] || null
+        }))
+        
+        setLogs(logsWithUsers)
+      }
+    }
+  } catch (error) {
+    console.error('Error cargando logs:', error)
+    notifyError('Error al cargar auditoría', error.message)
+  } finally {
+    setLoading(false)
+  }
+}
+```
+
+### Default Filters
+
+By default, the audit log shows the last 7 days:
+
+```jsx
+const [filters, setFilters] = useState({
+  action_type: '',
+  table_affected: '',
+  desde: (() => { 
+    const d = new Date(); 
+    d.setDate(d.getDate() - 7); 
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` 
+  })(),
+  hasta: getLocalDate()
+})
+```
+
+## Available Filters
+
+### Action Type Filter
+
+```jsx
+<select name="action_type" value={filters.action_type} onChange={handleFilterChange}>
+  <option value="">Todas</option>
+  <option value="INSERT">INSERT (Crear)</option>
+  <option value="UPDATE">UPDATE (Actualizar)</option>
+  <option value="DELETE">DELETE (Eliminar)</option>
+</select>
+```
+
+<Note>
+  The UI filter only shows INSERT, UPDATE, and DELETE. APPROVE and REJECT actions appear when filtering by UPDATE on guia_entrada table, or by viewing all actions.
+</Note>
+
+### Table Filter
+
+```jsx
+<select name="table_affected" value={filters.table_affected} onChange={handleFilterChange}>
+  <option value="">Todas</option>
+  <option value="product">Rubros</option>
+  <option value="guia_entrada">Guías de entrada</option>
+  <option value="menu_diario">Menús</option>
+  <option value="output">Salidas</option>
+  <option value="asistencia_diaria">Asistencia</option>
+</select>
+```
+
+### Date Range Filters
+
+```jsx
+<div className="form-group">
+  <label>Desde</label>
+  <input
+    type="date"
+    name="desde"
+    value={filters.desde}
+    onChange={handleFilterChange}
+  />
+</div>
+
+<div className="form-group">
+  <label>Hasta</label>
+  <input
+    type="date"
+    name="hasta"
+    value={filters.hasta}
+    onChange={handleFilterChange}
+  />
+</div>
+```
+
+## Audit Log Display
+
+The log table shows:
+
+- **Fecha y hora** - Timestamp in Venezuelan locale
+- **Usuario** - User's full name (or "Sistema" if no user)
+- **Acción** - Badge showing INSERT (green), UPDATE (yellow), DELETE (red)
+- **Tabla** - Affected table name
+- **ID** - Record ID
+- **Detalles** - Collapsible details section with full JSON
+
+### Action Badge Styling
+
+```jsx
+<span className={`badge ${
+  log.action_type === 'INSERT' ? 'badge-success' :
+  log.action_type === 'UPDATE' ? 'badge-warning' :
+  'badge-danger'
+}`}>
+  {log.action_type}
+</span>
+```
+
+### Details Display
+
+```jsx
+<details>
+  <summary style={{ cursor: 'pointer' }}>Ver detalles</summary>
+  <pre style={{ 
+    fontSize: '0.75rem', 
+    marginTop: '0.5rem', 
+    padding: '0.5rem',
+    background: '#f8fafc',
+    borderRadius: '4px',
+    overflow: 'auto',
+    maxHeight: '200px'
+  }}>
+    {log.details || 'Sin detalles'}
+  </pre>
+</details>
+```
+
+## Exporting Audit Logs
+
+### CSV Export Function
+
+```jsx
+const exportToCSV = () => {
+  let csv = 'Fecha y hora,Usuario,Acción,Tabla,ID Registro,Detalles\n'
+  
+  logs.forEach(log => {
+    const timestamp = new Date(log.timestamp).toLocaleString('es-VE')
+    const user = log.users?.full_name || 'Sistema'
+    const details = (log.details || '').replace(/"/g, '""') // Escape quotes
+    
+    csv += `"${timestamp}","${user}","${log.action_type}","${log.table_affected || '-'}","${log.record_id || '-'}","${details}"\n`
+  })
+
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `auditoria_${getLocalDate()}.csv`
+  link.click()
+}
+```
+
+<Note>
+  The CSV export includes the UTF-8 BOM (`\uFEFF`) to ensure proper display of Spanish characters in Excel.
+</Note>
+
+## Row Level Security
+
+All users can view audit logs:
+
+```sql
+CREATE POLICY "Audit: Todos pueden ver" ON audit_log FOR SELECT USING (true);
+```
+
+<Warning>
+  Audit logs are **read-only** from the application. Only database triggers can insert records. There is no UI for deleting or modifying audit entries.
+</Warning>
+
+## Audit Log Limits
+
+The component limits results to 100 records per query:
+
+```jsx
+.limit(100)
+```
+
+```jsx
+<h3 className="font-semibold">Últimos 100 registros</h3>
+<span className="text-sm text-secondary">Total: {logs.length}</span>
+```
+
+## Common Use Cases
+
+### Track Inventory Changes
+
+Filter by `table_affected = 'product'` and `action_type = 'UPDATE'` to see all inventory modifications.
+
+### Monitor Guía Approvals
+
+Filter by `table_affected = 'guia_entrada'` to see all approval and rejection actions.
+
+### Find User Actions
+
+The "Usuario" column shows who performed each action. Export to CSV and filter by user name.
+
+### Investigate Stock Discrepancies
+
+Combine filters for `output` table to track all salidas, or `guia_entrada` to review all entradas.
+
+## Related Documentation
+
+- [User Management](/admin/user-management) - User actions are logged with full names
+- [Inventory Management](/features/inventory-management) - Product changes are audited
+- [Entry Guides](/features/entry-guides) - APPROVE/REJECT actions are logged

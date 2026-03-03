@@ -1,0 +1,564 @@
+---
+title: 'Row Level Security (RLS) Policies'
+description: 'Complete reference for database security policies and access control'
+---
+
+## Security Overview
+
+The PAE Inventory System implements **Row Level Security (RLS)** on all tables to enforce role-based access control at the database level.
+
+### Security Principles
+
+1. **Defense in Depth**: Security enforced at database level, not just application layer
+2. **Least Privilege**: Users only have access to operations required for their role
+3. **Audit Trail**: All modifications are logged automatically
+4. **Role Hierarchy**: Clear permission levels (Desarrollador > Director > Madre Procesadora > Supervisor)
+
+---
+
+## Role Hierarchy
+
+<Card title="Desarrollador (id_rol = 4)" icon="code">
+  **Full System Administrator**
+  
+  - All permissions on all tables
+  - Can modify Director accounts
+  - Can assign Director role
+  - Only assignable from database directly
+</Card>
+
+<Card title="Director (id_rol = 1)" icon="user-tie">
+  **School Administrator**
+  
+  - Approve/reject delivery guides
+  - Manage users (except other Directors and Desarrolladores)
+  - Full CRUD on inventory
+  - Delete permissions on products
+</Card>
+
+<Card title="Madre Procesadora (id_rol = 2)" icon="utensils">
+  **Kitchen Manager**
+  
+  - Create delivery guides and inputs
+  - Record daily operations
+  - Modify products and inventory
+  - Cannot approve guides or manage users
+</Card>
+
+<Card title="Supervisor (id_rol = 3)" icon="eye">
+  **Read-Only Observer**
+  
+  - View all data
+  - No modification permissions
+  - Supervision and reporting only
+</Card>
+
+---
+
+## RLS Policies by Table
+
+### `users` - User Management
+
+<ResponseField name="Users: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+  
+  **Description**: All authenticated users can view user accounts
+</ResponseField>
+
+<ResponseField name="Users: Director puede insertar">
+  **Operation**: INSERT
+  
+  **Policy**: `WITH CHECK (get_user_role() IN (1, 4))`
+  
+  **Description**: Only Director and Desarrollador can create user accounts
+</ResponseField>
+
+<ResponseField name="Users: Director puede actualizar">
+  **Operation**: UPDATE
+  
+  **Policy**: `USING (get_user_role() IN (1, 2, 3, 4))`
+  
+  **Description**: All users can update (but `protect_director_users()` trigger enforces additional restrictions)
+  
+  **Note**: The trigger prevents:
+  - Self-modification
+  - Modifying Desarrollador accounts
+  - Directors modifying other Directors
+  - Non-Desarrolladores promoting to Director
+</ResponseField>
+
+<Warning>
+User modifications are protected by BOTH RLS policies AND trigger functions. The trigger `protect_director_users()` enforces business rules beyond simple role checking.
+</Warning>
+
+---
+
+### `product` - Product Catalog
+
+<ResponseField name="Products: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+</ResponseField>
+
+<ResponseField name="Products: Director y Madre Procesadora pueden crear">
+  **Operation**: INSERT
+  
+  **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+</ResponseField>
+
+<ResponseField name="Products: Director y Madre Procesadora pueden actualizar">
+  **Operation**: UPDATE
+  
+  **Policy**: `USING (get_user_role() IN (1, 2, 4))`
+</ResponseField>
+
+<ResponseField name="Products: Solo Director puede borrar">
+  **Operation**: DELETE
+  
+  **Policy**: `USING (get_user_role() IN (1, 4))`
+  
+  **Rationale**: Product deletion is restricted to prevent accidental data loss
+</ResponseField>
+
+---
+
+### `category` - Product Categories
+
+<ResponseField name="Categories: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+</ResponseField>
+
+<ResponseField name="Categories: Admin puede modificar">
+  **Operation**: ALL (INSERT, UPDATE, DELETE)
+  
+  **Policy**: `USING (get_user_role() IN (1, 4))`
+  
+  **Rationale**: Categories are structural data, only administrators should modify
+</ResponseField>
+
+---
+
+### `guia_entrada` - Delivery Guides
+
+<ResponseField name="guia_entrada_select">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+  
+  **Description**: All users can view delivery guides
+</ResponseField>
+
+<ResponseField name="guia_entrada_insert">
+  **Operation**: INSERT
+  
+  **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+  
+  **Description**: Madre Procesadora and Director can create guides
+</ResponseField>
+
+<ResponseField name="guia_entrada_update">
+  **Operation**: UPDATE
+  
+  **Policy**: `USING (get_user_role() IN (1, 4))`
+  
+  **Description**: Only Director/Desarrollador can update (typically for approval/rejection)
+  
+  **Note**: Updates are usually done via `aprobar_guia()` or `rechazar_guia()` RPC functions
+</ResponseField>
+
+<Note>
+The maker-checker pattern is enforced here: Madre Procesadora creates, Director approves. This separation of duties ensures oversight.
+</Note>
+
+---
+
+### `input` - Delivery Line Items
+
+<ResponseField name="Input: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+</ResponseField>
+
+<ResponseField name="Input: Admin y Cocinera pueden crear">
+  **Operation**: INSERT
+  
+  **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+  
+  **Description**: Created when delivery guides are submitted
+</ResponseField>
+
+<Warning>
+No UPDATE policy for `input` table. Once created, input records should not be modified directly. Changes require deleting the entire guide and recreating it.
+</Warning>
+
+---
+
+### `output` - Stock Withdrawals
+
+<ResponseField name="Output: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+</ResponseField>
+
+<ResponseField name="Output: Admin y Cocinera pueden crear">
+  **Operation**: INSERT
+  
+  **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+  
+  **Description**: Created during daily operations or manual withdrawals
+  
+  **Note**: The `update_stock_on_output()` trigger automatically deducts stock
+</ResponseField>
+
+---
+
+### `registro_diario` - Daily Meal Records
+
+<ResponseField name="registro_diario_select">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+</ResponseField>
+
+<ResponseField name="registro_diario_insert">
+  **Operation**: INSERT
+  
+  **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+  
+  **Description**: Created via `procesar_operacion_diaria()` RPC function
+</ResponseField>
+
+---
+
+### `receta_porcion` - Portion Yields
+
+<ResponseField name="Porciones: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+</ResponseField>
+
+<ResponseField name="Porciones: Admin y Cocinera pueden modificar">
+  **Operation**: ALL (INSERT, UPDATE, DELETE)
+  
+  **Policy**: `USING (get_user_role() IN (1, 2, 4))`
+  
+  **Description**: Configuration table for meal calculations
+</ResponseField>
+
+---
+
+### `audit_log` - Audit Trail
+
+<ResponseField name="Audit: Todos pueden ver">
+  **Operation**: SELECT
+  
+  **Policy**: `USING (true)`
+  
+  **Description**: Read-only for all users. No INSERT/UPDATE/DELETE policies.
+  
+  **Note**: Audit records are only created via trigger functions
+</ResponseField>
+
+<Warning>
+The `audit_log` table has no INSERT/UPDATE/DELETE policies for regular users. All entries are created automatically by trigger functions running with elevated privileges.
+</Warning>
+
+---
+
+### Legacy Tables (asistencia_diaria, menu_diario, menu_detalle)
+
+<Accordion title="asistencia_diaria - Student Attendance (LEGACY)">
+  <ResponseField name="Asistencia: Todos pueden ver">
+    **Operation**: SELECT | **Policy**: `USING (true)`
+  </ResponseField>
+  
+  <ResponseField name="Asistencia: Admin y Cocinera pueden crear">
+    **Operation**: INSERT | **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+  </ResponseField>
+  
+  <ResponseField name="Asistencia: Admin y Cocinera pueden actualizar">
+    **Operation**: UPDATE | **Policy**: `USING (get_user_role() IN (1, 2, 4))`
+  </ResponseField>
+  
+  <ResponseField name="Asistencia: Admin y Cocinera pueden eliminar">
+    **Operation**: DELETE | **Policy**: `USING (get_user_role() IN (1, 2, 4))`
+  </ResponseField>
+</Accordion>
+
+<Accordion title="menu_diario - Daily Menu (LEGACY)">
+  <ResponseField name="Menu: Todos pueden ver">
+    **Operation**: SELECT | **Policy**: `USING (true)`
+  </ResponseField>
+  
+  <ResponseField name="Menu: Admin y Cocinera pueden crear">
+    **Operation**: INSERT | **Policy**: `WITH CHECK (get_user_role() IN (1, 2, 4))`
+  </ResponseField>
+  
+  <ResponseField name="Menu: Admin y Cocinera pueden actualizar">
+    **Operation**: UPDATE | **Policy**: `USING (get_user_role() IN (1, 2, 4))`
+  </ResponseField>
+</Accordion>
+
+<Accordion title="menu_detalle - Menu Items (LEGACY)">
+  <ResponseField name="Menu detalle: Todos pueden ver">
+    **Operation**: SELECT | **Policy**: `USING (true)`
+  </ResponseField>
+  
+  <ResponseField name="Menu detalle: Admin y Cocinera pueden modificar">
+    **Operation**: ALL | **Policy**: `USING (get_user_role() IN (1, 2, 4))`
+  </ResponseField>
+</Accordion>
+
+---
+
+## Security Functions
+
+### `get_user_role()`
+
+Helper function used throughout RLS policies.
+
+```sql
+CREATE OR REPLACE FUNCTION get_user_role()
+RETURNS INTEGER AS $$
+    SELECT id_rol FROM users WHERE id_user = auth.uid();
+$$ LANGUAGE SQL SECURITY DEFINER;
+```
+
+**Purpose:**
+- Retrieves the current user's role ID
+- Used in `USING` and `WITH CHECK` clauses
+- Runs with elevated privileges (`SECURITY DEFINER`)
+
+**Example Usage:**
+```sql
+CREATE POLICY "example_policy" ON some_table
+FOR INSERT WITH CHECK (get_user_role() IN (1, 2));
+```
+
+---
+
+## Trigger-Based Security
+
+Beyond RLS policies, several triggers enforce business rules:
+
+### User Protection Triggers
+
+<CodeGroup>
+```sql protect_director_users()
+-- BEFORE UPDATE ON users
+-- Prevents:
+-- ✗ Self-modification from user management
+-- ✗ Modifying Desarrollador accounts
+-- ✗ Directors modifying other Directors
+-- ✗ Non-Desarrolladores promoting users to Director
+-- ✗ Anyone assigning Desarrollador role
+```
+
+```sql protect_director_insert()
+-- BEFORE INSERT ON users
+-- Prevents:
+-- ✗ Creating users with Desarrollador role
+-- ✗ Non-Desarrolladores creating Director accounts
+```
+</CodeGroup>
+
+### Stock Validation Trigger
+
+```sql
+-- update_stock_on_output()
+-- AFTER INSERT ON output
+-- Enforces:
+-- ✓ Stock cannot go negative
+-- ✓ Withdrawals must have sufficient inventory
+-- ✓ Atomic stock updates with row locking
+```
+
+---
+
+## Permission Matrix
+
+Quick reference for role permissions:
+
+| Table | Desarrollador | Director | Madre Procesadora | Supervisor |
+|-------|--------------|----------|-------------------|------------|
+| **users** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✗ | ✗ |
+| UPDATE | ✓ | ✓* | ✗ | ✗ |
+| DELETE | ✗ | ✗ | ✗ | ✗ |
+| **product** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✓ | ✗ |
+| UPDATE | ✓ | ✓ | ✓ | ✗ |
+| DELETE | ✓ | ✓ | ✗ | ✗ |
+| **category** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✗ | ✗ |
+| UPDATE | ✓ | ✓ | ✗ | ✗ |
+| DELETE | ✓ | ✓ | ✗ | ✗ |
+| **guia_entrada** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✓ | ✗ |
+| UPDATE | ✓ | ✓ | ✗ | ✗ |
+| DELETE | ✗ | ✗ | ✗ | ✗ |
+| **input** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✓ | ✗ |
+| UPDATE | ✗ | ✗ | ✗ | ✗ |
+| DELETE | ✗ | ✗ | ✗ | ✗ |
+| **output** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✓ | ✗ |
+| UPDATE | ✗ | ✗ | ✗ | ✗ |
+| DELETE | ✗ | ✗ | ✗ | ✗ |
+| **registro_diario** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | ✓ | ✓ | ✓ | ✗ |
+| UPDATE | ✗ | ✗ | ✗ | ✗ |
+| DELETE | ✗ | ✗ | ✗ | ✗ |
+| **audit_log** |
+| SELECT | ✓ | ✓ | ✓ | ✓ |
+| INSERT | Auto | Auto | Auto | Auto |
+| UPDATE | ✗ | ✗ | ✗ | ✗ |
+| DELETE | ✗ | ✗ | ✗ | ✗ |
+
+<Note>
+**Legend:**
+- ✓ = Allowed
+- ✗ = Denied
+- \* = Allowed but restricted by triggers
+- Auto = Automatically created by triggers
+</Note>
+
+---
+
+## RPC Function Security
+
+RPC functions have internal permission checks:
+
+### `aprobar_guia()` / `rechazar_guia()`
+
+```sql
+SELECT id_rol INTO v_user_role FROM users WHERE id_user = auth.uid();
+IF v_user_role IS NULL OR v_user_role NOT IN (1, 4) THEN
+  RAISE EXCEPTION 'No tiene permisos para aprobar guias.';
+END IF;
+```
+
+**Allowed Roles**: Director (1), Desarrollador (4)
+
+---
+
+### `procesar_operacion_diaria()`
+
+```sql
+SELECT id_rol INTO v_user_role FROM users WHERE id_user = auth.uid();
+IF v_user_role IS NULL OR v_user_role NOT IN (1, 2, 4) THEN
+  RAISE EXCEPTION 'No tiene permisos para registrar operaciones diarias.';
+END IF;
+```
+
+**Allowed Roles**: Director (1), Madre Procesadora (2), Desarrollador (4)
+
+---
+
+### `get_lotes_por_vencer()`
+
+**No explicit permission check** - Available to all authenticated users for reporting
+
+---
+
+## Security Best Practices
+
+<Card title="Always Use RLS" icon="shield-halved">
+  Never disable RLS on production tables. All client queries automatically respect RLS policies.
+</Card>
+
+<Card title="Principle of Least Privilege" icon="user-lock">
+  Grant only the minimum permissions required for each role. Supervisors get read-only access.
+</Card>
+
+<Card title="Use SECURITY DEFINER Carefully" icon="exclamation-triangle">
+  Functions marked `SECURITY DEFINER` bypass RLS. Only use for trusted business logic with internal validation.
+</Card>
+
+<Card title="Audit Everything" icon="file-lines">
+  All state-changing operations create audit trail entries. Never disable audit triggers.
+</Card>
+
+<Card title="Validate in Functions" icon="code">
+  RPC functions should validate permissions internally, not rely solely on RLS.
+</Card>
+
+---
+
+## Testing RLS Policies
+
+To test policies as different users:
+
+```sql
+-- Temporarily become a specific user
+SET LOCAL ROLE authenticated;
+SET LOCAL request.jwt.claim.sub = '<user-uuid>';
+
+-- Run queries to test access
+SELECT * FROM product;
+INSERT INTO product (product_name, unit_measure) VALUES ('Test', 'kg');
+
+-- Reset
+RESET ROLE;
+```
+
+<Warning>
+Always test RLS policies in a development environment before deploying to production.
+</Warning>
+
+---
+
+## Common Security Patterns
+
+### Read All, Write Restricted
+
+Most tables follow this pattern:
+```sql
+-- Everyone can read
+CREATE POLICY "select_all" ON table_name FOR SELECT USING (true);
+
+-- Only specific roles can write
+CREATE POLICY "insert_restricted" ON table_name FOR INSERT
+  WITH CHECK (get_user_role() IN (1, 2, 4));
+```
+
+### Admin Only Modifications
+
+Structural tables (categories, roles):
+```sql
+CREATE POLICY "admin_only" ON table_name FOR ALL
+  USING (get_user_role() IN (1, 4));
+```
+
+### Append-Only Logs
+
+Audit tables:
+```sql
+-- Only SELECT policy, no INSERT/UPDATE/DELETE for users
+CREATE POLICY "read_only" ON audit_log FOR SELECT USING (true);
+
+-- Inserts only via triggers with SECURITY DEFINER
+```
+
+---
+
+## Related Documentation
+
+- [Database Tables Reference](/database/tables) - Table structures and constraints
+- [PostgreSQL Functions](/database/functions) - Trigger functions and RPC endpoints
+- [Database Overview](/database/overview) - Architecture and design principles

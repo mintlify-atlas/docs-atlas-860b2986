@@ -1,0 +1,623 @@
+---
+title: 'PostgreSQL Functions Overview'
+description: 'Database functions, triggers, and RPC endpoints'
+---
+
+## Function Categories
+
+The PAE Inventory System uses PostgreSQL functions for:
+
+1. **Trigger Functions** - Automatic data validation and updates
+2. **RPC Functions** - Backend business logic callable from frontend
+3. **Helper Functions** - Utility functions for policies and queries
+
+---
+
+## Trigger Functions
+
+### `update_updated_at_column()`
+
+Automatically updates the `updated_at` timestamp on row modifications.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER
+```
+
+**Used On:**
+- `product` table (via `update_product_updated_at` trigger)
+
+**Logic:**
+```sql
+NEW.updated_at = NOW();
+RETURN NEW;
+```
+
+**Example:**
+```sql
+UPDATE product SET product_name = 'Arroz Blanco' WHERE id_product = 1;
+-- updated_at is automatically set to NOW()
+```
+
+---
+
+### `protect_director_users()`
+
+Enforces user role hierarchy and prevents unauthorized modifications.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION protect_director_users()
+RETURNS TRIGGER
+SECURITY DEFINER
+```
+
+**Trigger:** `trigger_protect_director` BEFORE UPDATE ON `users`
+
+**Protection Rules:**
+
+<Tabs>
+  <Tab title="Heartbeat Bypass">
+    Allows updates that **only** modify activity tracking fields:
+    - `last_activity`
+    - `last_seen`
+    - `last_ip`
+    
+    All other fields (`username`, `full_name`, `id_rol`, `is_active`) must remain unchanged.
+  </Tab>
+  
+  <Tab title="Self-Modification">
+    **Blocked**: Users cannot modify their own account from user management interface
+    
+    ```sql
+    IF OLD.id_user = auth.uid() THEN
+      RAISE EXCEPTION 'No puede modificar su propia cuenta';
+    END IF;
+    ```
+  </Tab>
+  
+  <Tab title="Desarrollador Protection">
+    **Blocked**: No one can modify Desarrollador accounts (only via direct DB access)
+    
+    ```sql
+    IF OLD.id_rol = 4 THEN
+      RAISE EXCEPTION 'No puede modificar la cuenta de un Desarrollador';
+    END IF;
+    ```
+  </Tab>
+  
+  <Tab title="Director Peer Protection">
+    **Blocked**: Directors cannot modify other Director accounts
+    
+    ```sql
+    IF v_actor_role = 1 AND OLD.id_rol = 1 THEN
+      RAISE EXCEPTION 'Un Director no puede modificar a otro Director';
+    END IF;
+    ```
+  </Tab>
+  
+  <Tab title="Role Promotion">
+    **Restricted**: Only Desarrollador can promote users to Director
+    
+    ```sql
+    IF NEW.id_rol = 1 AND OLD.id_rol != 1 AND v_actor_role != 4 THEN
+      RAISE EXCEPTION 'Solo el Desarrollador puede asignar el rol de Director';
+    END IF;
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+### `protect_director_insert()`
+
+Validates role assignments when creating new users.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION protect_director_insert()
+RETURNS TRIGGER
+SECURITY DEFINER
+```
+
+**Trigger:** `trigger_protect_director_insert` BEFORE INSERT ON `users`
+
+**Validation Rules:**
+- Desarrollador role (id=4) can only be assigned from database
+- Only Desarrollador can create Director accounts
+
+---
+
+### `update_stock_on_output()`
+
+Automatically deducts inventory stock when outputs are created.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION update_stock_on_output()
+RETURNS TRIGGER
+```
+
+**Trigger:** `trigger_update_stock_output` AFTER INSERT ON `output`
+
+**Logic:**
+
+<Steps>
+  <Step title="Lock Product Row">
+    Uses `SELECT FOR UPDATE` to prevent race conditions:
+    ```sql
+    SELECT stock INTO v_stock_actual
+    FROM product
+    WHERE id_product = NEW.id_product
+    FOR UPDATE;
+    ```
+  </Step>
+  
+  <Step title="Validate Stock">
+    Ensures sufficient inventory:
+    ```sql
+    IF v_stock_actual < NEW.amount THEN
+        RAISE EXCEPTION 'Stock insuficiente para el producto %';
+    END IF;
+    ```
+  </Step>
+  
+  <Step title="Update Stock">
+    Deducts the withdrawal amount:
+    ```sql
+    UPDATE product
+    SET stock = stock - NEW.amount
+    WHERE id_product = NEW.id_product;
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+This trigger ensures stock never goes negative. Attempted withdrawals exceeding available stock will fail with an exception.
+</Warning>
+
+---
+
+### `log_audit()`
+
+Generic audit logging function for all critical tables.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION log_audit()
+RETURNS TRIGGER
+SECURITY DEFINER
+```
+
+**Applied To:**
+- `product` (audit_product trigger)
+- `guia_entrada` (audit_guia trigger)
+- `menu_diario` (audit_menu trigger)
+- `output` (audit_output trigger)
+
+**Captured Data:**
+
+<Tabs>
+  <Tab title="INSERT">
+    ```json
+    {
+      "id_user": "uuid",
+      "action_type": "INSERT",
+      "table_affected": "product",
+      "record_id": 123,
+      "details": "{\"id_product\": 123, \"product_name\": \"Arroz\", ...}"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="UPDATE">
+    ```json
+    {
+      "id_user": "uuid",
+      "action_type": "UPDATE",
+      "table_affected": "product",
+      "record_id": 123,
+      "details": "Antes: {...} | Despues: {...}"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="DELETE">
+    ```json
+    {
+      "id_user": "uuid",
+      "action_type": "DELETE",
+      "table_affected": "product",
+      "record_id": 123,
+      "details": "{\"id_product\": 123, \"product_name\": \"Arroz\", ...}"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## RPC Functions
+
+### `aprobar_guia()`
+
+Transactionally approves a delivery guide and updates inventory.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION aprobar_guia(
+  p_id_guia INTEGER,
+  p_comentarios TEXT DEFAULT NULL
+)
+RETURNS JSON
+SECURITY DEFINER
+```
+
+**Parameters:**
+<ParamField path="p_id_guia" type="INTEGER" required>
+  ID of the delivery guide to approve
+</ParamField>
+
+<ParamField path="p_comentarios" type="TEXT">
+  Optional approval comments
+</ParamField>
+
+**Returns:**
+```json
+{
+  "success": true,
+  "id_guia": 42,
+  "productos_procesados": 5,
+  "mensaje": "Guia ABC-123 aprobada. 5 productos actualizados."
+}
+```
+
+**Authorization:**
+- Only users with `id_rol IN (1, 4)` (Director or Desarrollador) can approve
+
+**Business Logic:**
+
+<Steps>
+  <Step title="Validate Permissions">
+    Verifies user has Director or Desarrollador role
+  </Step>
+  
+  <Step title="Validate Guide Status">
+    Ensures guide is in 'Pendiente' state (not already processed)
+  </Step>
+  
+  <Step title="Update Guide Status">
+    Sets `estado = 'Aprobada'`, records approver and timestamp
+  </Step>
+  
+  <Step title="Update Inventory">
+    Loops through all `input` records and adds quantities to `product.stock`
+  </Step>
+  
+  <Step title="Log Audit">
+    Creates audit trail with action='APPROVE'
+  </Step>
+</Steps>
+
+**Example Usage:**
+```javascript
+const { data, error } = await supabase.rpc('aprobar_guia', {
+  p_id_guia: 42,
+  p_comentarios: 'Todos los productos verificados y en buen estado'
+});
+```
+
+---
+
+### `rechazar_guia()`
+
+Rejects a delivery guide with a required reason.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION rechazar_guia(
+  p_id_guia INTEGER,
+  p_motivo TEXT
+)
+RETURNS JSON
+SECURITY DEFINER
+```
+
+**Parameters:**
+<ParamField path="p_id_guia" type="INTEGER" required>
+  ID of the delivery guide to reject
+</ParamField>
+
+<ParamField path="p_motivo" type="TEXT" required>
+  Rejection reason (cannot be empty)
+</ParamField>
+
+**Returns:**
+```json
+{
+  "success": true,
+  "id_guia": 42,
+  "mensaje": "Guia ABC-123 rechazada."
+}
+```
+
+**Authorization:**
+- Only users with `id_rol IN (1, 4)` can reject
+
+**Validation:**
+- Reason (`p_motivo`) must not be null or empty
+- Guide must be in 'Pendiente' state
+
+<Warning>
+Rejected guides do NOT update inventory. Stock levels remain unchanged.
+</Warning>
+
+---
+
+### `get_lotes_por_vencer()`
+
+Queries batches nearing expiration date (FIFO-aware).
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION get_lotes_por_vencer(
+  p_dias INTEGER DEFAULT 30
+)
+RETURNS TABLE(...)
+SECURITY DEFINER
+```
+
+**Parameters:**
+<ParamField path="p_dias" type="INTEGER" default="30">
+  Number of days ahead to check for expiring batches
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="id_product" type="INTEGER">
+  Product ID
+</ResponseField>
+
+<ResponseField name="product_name" type="TEXT">
+  Product name
+</ResponseField>
+
+<ResponseField name="stock" type="NUMERIC(10,2)">
+  Current total stock
+</ResponseField>
+
+<ResponseField name="unit_measure" type="TEXT">
+  Unit of measurement
+</ResponseField>
+
+<ResponseField name="category_name" type="TEXT">
+  Product category
+</ResponseField>
+
+<ResponseField name="fecha_vencimiento" type="DATE">
+  Batch expiration date
+</ResponseField>
+
+<ResponseField name="cantidad_lote" type="NUMERIC(10,2)">
+  Quantity in this specific batch
+</ResponseField>
+
+<ResponseField name="dias_restantes" type="INTEGER">
+  Days until expiration
+</ResponseField>
+
+**Example Usage:**
+```javascript
+// Get batches expiring in next 15 days
+const { data, error } = await supabase.rpc('get_lotes_por_vencer', {
+  p_dias: 15
+});
+```
+
+**Query Logic:**
+- Extracts batch details from JSONB `lotes_detalle` field
+- Only includes batches from approved guides
+- Orders by expiration date (oldest first)
+
+---
+
+### `procesar_operacion_diaria()`
+
+Processes daily meal operations with FIFO batch consumption.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION procesar_operacion_diaria(
+  p_fecha DATE,
+  p_turno TEXT,
+  p_asistencia INTEGER,
+  p_rubros INTEGER[]
+)
+RETURNS JSON
+SECURITY DEFINER
+```
+
+**Parameters:**
+<ParamField path="p_fecha" type="DATE" required>
+  Operation date
+</ParamField>
+
+<ParamField path="p_turno" type="TEXT" required>
+  Meal shift: 'Desayuno', 'Almuerzo', or 'Merienda'
+</ParamField>
+
+<ParamField path="p_asistencia" type="INTEGER" required>
+  Total student attendance
+</ParamField>
+
+<ParamField path="p_rubros" type="INTEGER[]" required>
+  Array of product IDs to consume
+</ParamField>
+
+**Returns:**
+```json
+{
+  "success": true,
+  "id_registro": 123,
+  "rubros_procesados": 5,
+  "mensaje": "Operacion registrada: 5 rubros procesados para 150 alumnos."
+}
+```
+
+**Authorization:**
+- Users with `id_rol IN (1, 2, 4)` (Director, Madre Procesadora, or Desarrollador)
+
+**Complex FIFO Logic:**
+
+<Steps>
+  <Step title="Create Daily Record">
+    Inserts into `registro_diario` with date, shift, and attendance
+  </Step>
+  
+  <Step title="Calculate Portions">
+    For each product:
+    ```sql
+    cantidad_necesaria = ROUND(p_asistencia / rendimiento_por_unidad, 2)
+    ```
+  </Step>
+  
+  <Step title="Lock Batch Rows">
+    Uses `SELECT FOR UPDATE` to prevent race conditions during concurrent operations
+  </Step>
+  
+  <Step title="FIFO Consumption">
+    - Orders batches by `fecha_vencimiento ASC` (oldest first)
+    - Consumes from each batch sequentially
+    - Updates JSONB `lotes_detalle` to reduce batch quantities
+    - Stops when full amount is consumed
+  </Step>
+  
+  <Step title="Validate Sufficiency">
+    Raises exception if batches are insufficient:
+    ```
+    'Lotes insuficientes para "Arroz". Faltan 5.50 unidades.'
+    ```
+  </Step>
+  
+  <Step title="Create Output">
+    Inserts into `output` table (triggers automatic stock deduction)
+  </Step>
+  
+  <Step title="Audit Trail">
+    Logs operation with all parameters
+  </Step>
+</Steps>
+
+**Example Usage:**
+```javascript
+const { data, error } = await supabase.rpc('procesar_operacion_diaria', {
+  p_fecha: '2026-03-15',
+  p_turno: 'Almuerzo',
+  p_asistencia: 150,
+  p_rubros: [1, 3, 4, 5]  // Arroz, Leche, Pollo, Caraotas
+});
+```
+
+<Note>
+This function implements First-In-First-Out (FIFO) inventory management, automatically consuming the oldest batches first to minimize waste from expiration.
+</Note>
+
+---
+
+## Helper Functions
+
+### `get_user_role()`
+
+Returns the role ID of the currently authenticated user.
+
+**Signature:**
+```sql
+CREATE OR REPLACE FUNCTION get_user_role()
+RETURNS INTEGER
+SECURITY DEFINER
+```
+
+**Usage:**
+Primarily used in Row Level Security (RLS) policies:
+
+```sql
+CREATE POLICY "Products: Director can delete" 
+ON product FOR DELETE
+USING (get_user_role() IN (1, 4));
+```
+
+**Logic:**
+```sql
+SELECT id_rol FROM users WHERE id_user = auth.uid();
+```
+
+---
+
+## Function Permissions
+
+All RPC functions are granted to `authenticated` role:
+
+```sql
+GRANT EXECUTE ON FUNCTION aprobar_guia(INTEGER, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION rechazar_guia(INTEGER, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_lotes_por_vencer(INTEGER) TO authenticated;
+GRANT EXECUTE ON FUNCTION procesar_operacion_diaria(DATE, TEXT, INTEGER, INTEGER[]) TO authenticated;
+```
+
+<Warning>
+All RPC functions implement internal permission checks. Even though they're granted to all authenticated users, role-based validation occurs within the function logic.
+</Warning>
+
+---
+
+## Error Handling
+
+All functions use PostgreSQL's exception mechanism:
+
+```sql
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE EXCEPTION 'Error al aprobar guia: %', SQLERRM;
+END;
+```
+
+**Common Error Patterns:**
+
+<CodeGroup>
+```sql Permission Denied
+RAISE EXCEPTION 'No tiene permisos para aprobar guias.';
+```
+
+```sql Invalid State
+RAISE EXCEPTION 'La guia ya fue procesada. Estado actual: %', v_guia_info.estado;
+```
+
+```sql Insufficient Stock
+RAISE EXCEPTION 'Stock insuficiente para el producto %. Stock actual: %, solicitado: %';
+```
+
+```sql Missing Configuration
+RAISE EXCEPTION 'El rubro "%" no tiene rendimiento configurado.', v_product_name;
+```
+</CodeGroup>
+
+---
+
+## Best Practices
+
+<Card title="Transaction Safety" icon="shield-check">
+  All RPC functions run in implicit transactions. If any step fails, all changes are rolled back.
+</Card>
+
+<Card title="Locking Strategy" icon="lock">
+  Use `SELECT FOR UPDATE` when reading data that will be modified to prevent race conditions.
+</Card>
+
+<Card title="Security Definer" icon="user-shield">
+  Functions marked `SECURITY DEFINER` run with the permissions of the function owner, not the caller. This allows controlled privilege escalation for specific operations.
+</Card>
+
+<Card title="Audit Everything" icon="clipboard-list">
+  All state-changing operations should create audit log entries for compliance and debugging.
+</Card>

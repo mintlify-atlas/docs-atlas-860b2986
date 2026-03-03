@@ -1,80 +1,389 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get started with PAE Inventory System in minutes
 ---
 
-## Get started in three steps
+## Welcome
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This guide will walk you through your first steps with PAE Inventory System, from account creation to performing basic inventory operations.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This quick start assumes you're using the hosted SaaS version. For local development setup, see the [Installation Guide](/installation).
 </Note>
+
+## Getting Started
+
+<Steps>
+  <Step title="Access the System">
+    Navigate to the application URL provided by your system administrator. You'll be greeted with the login screen.
+  </Step>
+
+  <Step title="Receive Your Credentials">
+    Your account must be created by a Director-level user. You'll receive:
+    - Email address
+    - Temporary password
+    - Your assigned role (Director, Madre Procesadora, or Supervisor)
+    
+    <Warning>
+      Change your password immediately after first login for security.
+    </Warning>
+  </Step>
+
+  <Step title="First Login">
+    Enter your credentials on the login page:
+    
+    ```jsx
+    // The login process authenticates through Supabase Auth
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: userEmail,
+      password: userPassword,
+    })
+    ```
+    
+    After successful authentication, the system verifies your user record and role from the `users` table.
+  </Step>
+
+  <Step title="Explore the Dashboard">
+    After login, you'll land on the Dashboard which shows:
+    - Current inventory summary
+    - Low stock alerts
+    - Recent activity
+    - Pending approvals (for Directors)
+    - Quick action buttons
+    
+    <Info>
+      The Dashboard is the central hub for all operations. All features are accessible from the navigation menu.
+    </Info>
+  </Step>
+</Steps>
+
+## Understanding User Roles
+
+Your role determines what you can see and do in the system:
+
+<Tabs>
+  <Tab title="Director">
+    **Full System Access**
+    
+    As a Director, you have complete control:
+    - ✅ Create and manage user accounts
+    - ✅ Approve/reject delivery guides (guías de entrada)
+    - ✅ Create, edit, and delete products
+    - ✅ Register daily operations
+    - ✅ View all reports and audit logs
+    - ✅ Configure portion yields
+    - ✅ Manage school information
+    
+    <Note>
+      Only Directors can approve delivery guides. This maker-checker workflow ensures inventory accuracy.
+    </Note>
+  </Tab>
+  
+  <Tab title="Madre Procesadora">
+    **Operational Management**
+    
+    As a Madre Procesadora (Kitchen Manager), you handle daily operations:
+    - ✅ Create delivery guides (requires Director approval)
+    - ✅ Create and edit products
+    - ✅ Register daily attendance and operations
+    - ✅ Record inventory outputs
+    - ✅ Configure portion yields
+    - ✅ View reports
+    - ❌ Cannot approve delivery guides
+    - ❌ Cannot manage users
+    
+    <Tip>
+      Create delivery guides as products arrive, then notify the Director for approval.
+    </Tip>
+  </Tab>
+  
+  <Tab title="Supervisor">
+    **Read-Only Access**
+    
+    As a Supervisor, you can monitor all operations:
+    - ✅ View all inventory and stock levels
+    - ✅ View delivery guides and their status
+    - ✅ View reports and audit logs
+    - ✅ View daily operations
+    - ❌ Cannot create or modify any records
+    - ❌ Cannot approve guides
+    - ❌ Cannot manage users
+    
+    <Info>
+      Perfect for oversight personnel who need visibility without making changes.
+    </Info>
+  </Tab>
+</Tabs>
+
+## Common Tasks
+
+### View Current Inventory
+
+<Steps>
+  <Step title="Navigate to Products">
+    Click **Productos** in the main navigation menu
+  </Step>
+  
+  <Step title="Browse or Search">
+    - Browse the complete product list
+    - Use the search box to find specific items
+    - Filter by category (Lácteos, Proteínas, etc.)
+    - Sort by name, stock level, or category
+  </Step>
+  
+  <Step title="View Product Details">
+    Each product shows:
+    - Product name and description
+    - Current stock level
+    - Unit of measurement (kg, lt, unidades)
+    - Category
+    - Last updated timestamp
+  </Step>
+</Steps>
+
+<Note>
+  Products with stock below 10 units are automatically highlighted as low stock.
+</Note>
+
+### Register a New Delivery
+
+<Steps>
+  <Step title="Go to Delivery Guides">
+    Navigate to **Guías de Entrada** from the main menu
+  </Step>
+  
+  <Step title="Create New Guide">
+    Click the **Nueva Guía** button and fill in:
+    
+    ```typescript
+    // Required fields
+    {
+      numero_guia_sunagro: "SUNAGRO-2026-001",  // Required: SUNAGRO guide number
+      numero_guia_sisecal: "SISECAL-2026-001",  // Optional: SISECAL number
+      fecha: "2026-03-03",                      // Delivery date
+      vocera_nombre: "María González",          // Community representative
+      telefono_vocera: "0414-1234567",         // Contact phone
+      notas: "Entrega mensual febrero"         // Optional notes
+    }
+    ```
+  </Step>
+  
+  <Step title="Add Products">
+    For each product in the delivery:
+    - Select the product from the dropdown
+    - Enter the quantity received
+    - Optionally enter unit amount (e.g., number of bags)
+    - Add batch details with expiration dates
+    
+    <Tip>
+      Always enter expiration dates for perishable items. The system uses this for FIFO tracking and expiration alerts.
+    </Tip>
+  </Step>
+  
+  <Step title="Save and Submit">
+    Save the guide. It will be created with **Pendiente** (Pending) status.
+    
+    <Warning>
+      The inventory is NOT updated yet. A Director must approve the guide first.
+    </Warning>
+  </Step>
+  
+  <Step title="Director Approval" icon="check">
+    Directors can:
+    - Review the guide in **Aprobar Guías**
+    - Approve it to update inventory
+    - Or reject it with a reason
+    
+    When approved, the system:
+    - Updates stock levels for all products
+    - Stores batch information for FIFO tracking
+    - Logs the approval in the audit trail
+  </Step>
+</Steps>
+
+### Register Daily Operations
+
+<Steps>
+  <Step title="Navigate to Daily Registration">
+    Click **Registro Diario** in the main menu
+  </Step>
+  
+  <Step title="Create Daily Record">
+    Enter the following information:
+    - **Date**: The service date
+    - **Shift**: Desayuno (Breakfast), Almuerzo (Lunch), or Merienda (Snack)
+    - **Attendance**: Number of students served
+    - **Products Used**: Select products consumed for this meal
+    
+    ```typescript
+    // Example daily registration
+    {
+      fecha: "2026-03-03",
+      turno: "Almuerzo",
+      asistencia_total: 150,  // 150 students
+      rubros: [1, 4, 5, 6]   // Product IDs: Arroz, Pollo, Caraotas, Pasta
+    }
+    ```
+  </Step>
+  
+  <Step title="Automatic Calculation">
+    The system automatically:
+    - Calculates required quantities based on portion yields
+    - Uses FIFO logic to consume oldest batches first
+    - Updates inventory stock levels
+    - Creates output records for tracking
+    
+    <Info>
+      Make sure all products have **portion yields** configured in the Porciones section, or the calculation will fail.
+    </Info>
+  </Step>
+  
+  <Step title="Review and Confirm">
+    Review the calculated quantities and confirm the registration.
+    
+    The system processes this through the `procesar_operacion_diaria()` database function:
+    
+    ```sql
+    -- Backend RPC function handles FIFO and stock updates
+    SELECT procesar_operacion_diaria(
+      '2026-03-03',    -- fecha
+      'Almuerzo',      -- turno
+      150,             -- asistencia
+      ARRAY[1,4,5,6]   -- rubros
+    );
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  If you see "Lotes insuficientes" (insufficient batches), there isn't enough stock to serve the registered attendance. Check inventory levels and ensure deliveries are approved.
+</Warning>
+
+## Navigation Overview
+
+Understand the main sections of the application:
+
+<CardGroup cols={2}>
+  <Card title="Dashboard" icon="gauge">
+    Overview of inventory status, alerts, and quick actions
+  </Card>
+  <Card title="Productos" icon="box">
+    Product catalog with stock levels and categories
+  </Card>
+  <Card title="Guías de Entrada" icon="truck">
+    Create and manage incoming delivery guides
+  </Card>
+  <Card title="Aprobar Guías" icon="circle-check">
+    Director-only: Approve or reject pending delivery guides
+  </Card>
+  <Card title="Registro Diario" icon="calendar-days">
+    Register daily meal service and attendance
+  </Card>
+  <Card title="Porciones" icon="calculator">
+    Configure portion yields for automatic quantity calculation
+  </Card>
+  <Card title="Reportes" icon="chart-line">
+    Generate reports on inventory, operations, and history
+  </Card>
+  <Card title="Auditoría" icon="list-check">
+    View complete audit trail of all system operations
+  </Card>
+  <Card title="Usuarios" icon="users">
+    Director-only: Create and manage user accounts
+  </Card>
+  <Card title="Datos Plantel" icon="school">
+    View and edit school information
+  </Card>
+</CardGroup>
+
+## Key Concepts
+
+<AccordionGroup>
+  <Accordion title="Guía de Entrada (Delivery Guide)">
+    A delivery guide represents a shipment of products received from SUNAGRO or other suppliers. It includes:
+    - Official guide numbers (SUNAGRO and SISECAL)
+    - Delivery date and community representative info
+    - List of products with quantities and batch details
+    - Approval status (Pendiente, Aprobada, Rechazada)
+    
+    Guides must be approved by a Director before inventory is updated.
+  </Accordion>
+  
+  <Accordion title="FIFO (First In, First Out)">
+    The system automatically tracks product batches with expiration dates and ensures that:
+    - Oldest batches are used first
+    - You're alerted when items approach expiration
+    - Batch quantities are deducted during daily operations
+    
+    This prevents waste and ensures food safety.
+  </Accordion>
+  
+  <Accordion title="Portion Yields (Rendimiento)">
+    Each product can have a configured yield that defines how many portions (servings) one unit provides. For example:
+    - 1 kg of rice = 12 portions
+    - 1 kg of chicken = 4 portions
+    - 1 kg of powdered milk = 40 portions
+    
+    This allows automatic calculation of quantities needed based on student attendance.
+  </Accordion>
+  
+  <Accordion title="Maker-Checker Workflow">
+    A two-step process for critical operations:
+    1. **Maker**: Staff creates the delivery guide
+    2. **Checker**: Director reviews and approves
+    
+    This separation of duties prevents errors and fraud.
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Log Out Securely" icon="right-from-bracket">
+    Always click the **Cerrar Sesión** button when done, especially on shared computers
+  </Card>
+  
+  <Card title="Verify Deliveries" icon="clipboard-check">
+    Directors should physically verify deliveries before approving guides
+  </Card>
+  
+  <Card title="Enter Expiration Dates" icon="calendar-xmark">
+    Always record expiration dates for perishable items to enable FIFO tracking
+  </Card>
+  
+  <Card title="Regular Inventory Checks" icon="boxes-stacked">
+    Periodically compare physical inventory with system stock levels
+  </Card>
+  
+  <Card title="Configure Yields First" icon="calculator">
+    Set up portion yields before registering daily operations
+  </Card>
+  
+  <Card title="Review Audit Logs" icon="list-check">
+    Directors should regularly review the audit trail for accountability
+  </Card>
+</CardGroup>
+
+## Need Help?
+
+<CardGroup cols={2}>
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Set up the system for local development
+  </Card>
+  
+  <Card title="User Management" icon="users" href="/admin/user-management">
+    Learn about creating and managing user accounts
+  </Card>
+  
+  <Card title="Inventory Features" icon="boxes-stacked" href="/features/inventory-management">
+    Deep dive into inventory management features
+  </Card>
+  
+  <Card title="Database Schema" icon="database" href="/database/overview">
+    Understand the database structure and relationships
+  </Card>
+</CardGroup>
+
+<Check>
+  You're now ready to use PAE Inventory System! Start by exploring the Dashboard and familiarizing yourself with the navigation.
+</Check>

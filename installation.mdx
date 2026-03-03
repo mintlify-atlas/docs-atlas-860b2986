@@ -1,0 +1,573 @@
+---
+title: Installation
+description: Set up PAE Inventory System for local development
+---
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed on your development machine:
+
+<CardGroup cols={3}>
+  <Card title="Node.js" icon="node-js">
+    Version 18.x or higher
+  </Card>
+  <Card title="npm" icon="npm">
+    Version 9.x or higher (comes with Node.js)
+  </Card>
+  <Card title="Git" icon="git-alt">
+    For cloning the repository
+  </Card>
+</CardGroup>
+
+<Tip>
+  Check your versions:
+  ```bash
+  node --version
+  npm --version
+  git --version
+  ```
+</Tip>
+
+## Supabase Account Setup
+
+PAE Inventory System uses Supabase for authentication and database. You'll need to create a Supabase project:
+
+<Steps>
+  <Step title="Create Supabase Account">
+    1. Go to [supabase.com](https://supabase.com)
+    2. Sign up for a free account
+    3. Verify your email address
+  </Step>
+
+  <Step title="Create New Project">
+    1. Click **New Project**
+    2. Choose an organization (or create one)
+    3. Enter project details:
+       - **Name**: `pae-inventory` (or your preferred name)
+       - **Database Password**: Generate a strong password (save it securely!)
+       - **Region**: Choose the closest region to Venezuela
+    4. Click **Create new project**
+    5. Wait 2-3 minutes for provisioning
+  </Step>
+
+  <Step title="Get API Credentials">
+    Once the project is ready:
+    1. Go to **Settings** → **API**
+    2. Copy these values (you'll need them later):
+       - **Project URL** (looks like `https://xxxxx.supabase.co`)
+       - **anon public** key (under "Project API keys")
+       - **service_role** key (under "Project API keys")
+    
+    <Warning>
+      Keep your `service_role` key secret! Never commit it to version control or expose it in client-side code.
+    </Warning>
+  </Step>
+
+  <Step title="Set Up Database Schema">
+    1. Go to **SQL Editor** in your Supabase dashboard
+    2. Create a new query
+    3. Copy the entire contents of `supabase_schema.sql` from the repository
+    4. Paste and click **Run**
+    5. Wait for completion (may take 30-60 seconds)
+    
+    This creates all tables, triggers, RLS policies, and sample data.
+    
+    <Info>
+      The schema file is located at `/workspace/source/supabase_schema.sql` in the repository.
+    </Info>
+  </Step>
+</Steps>
+
+## Local Development Setup
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the source code to your local machine:
+    
+    ```bash
+    git clone <repository-url>
+    cd pae-inventory
+    ```
+    
+    <Note>
+      Replace `<repository-url>` with the actual Git repository URL.
+    </Note>
+  </Step>
+
+  <Step title="Install Dependencies">
+    Install all required npm packages:
+    
+    ```bash
+    npm install
+    ```
+    
+    This installs the following key dependencies:
+    
+    ```json
+    {
+      "@supabase/supabase-js": "^2.39.0",
+      "lucide-react": "^0.575.0",
+      "react": "^18.2.0",
+      "react-dom": "^18.2.0",
+      "react-router-dom": "^6.21.0",
+      "sweetalert2": "^11.26.20"
+    }
+    ```
+    
+    Dev dependencies include Vite, Tailwind CSS, and PostCSS.
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Create a `.env` file in the project root:
+    
+    ```bash
+    touch .env
+    ```
+    
+    Add your Supabase credentials:
+    
+    ```bash
+    VITE_SUPABASE_URL=https://your-project.supabase.co
+    VITE_SUPABASE_ANON_KEY=your-anon-key-here
+    VITE_SUPABASE_SERVICE_ROLE_KEY=your-service-role-key-here
+    ```
+    
+    <Warning>
+      Replace the placeholder values with your actual Supabase credentials from Step 3 of Supabase setup.
+    </Warning>
+    
+    The application reads these variables in `src/supabaseClient.js`:
+    
+    ```javascript
+    // Obtener las variables de entorno
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+    const supabaseServiceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY
+
+    // Validar que existan
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error('ERROR: Faltan variables de entorno de Supabase')
+      console.log('Asegúrate de tener un archivo .env con VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY')
+    }
+
+    // Crear el cliente de Supabase
+    export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+    ```
+  </Step>
+
+  <Step title="Create Initial Admin User">
+    You need at least one Director user to access the system. Create one directly in Supabase:
+    
+    1. Go to **Authentication** → **Users** in Supabase dashboard
+    2. Click **Add user** → **Create new user**
+    3. Enter:
+       - **Email**: `director@example.com`
+       - **Password**: Your secure password
+       - **Auto Confirm User**: ✅ Enable
+    4. Click **Create user**
+    5. Copy the **User UID** (you'll need it next)
+    
+    Now add the user to the `users` table:
+    
+    1. Go to **Table Editor** → **users**
+    2. Click **Insert row**
+    3. Enter:
+       - **id_user**: Paste the User UID from above
+       - **username**: `director`
+       - **full_name**: `Director Principal`
+       - **id_rol**: `1` (Director role)
+       - **is_active**: `true`
+    4. Click **Save**
+    
+    <Info>
+      After the first Director account is created, you can create additional users from within the application.
+    </Info>
+  </Step>
+
+  <Step title="Start Development Server">
+    Launch the Vite development server:
+    
+    ```bash
+    npm run dev
+    ```
+    
+    You should see output like:
+    
+    ```
+    VITE v5.0.8  ready in 423 ms
+
+    ➜  Local:   http://localhost:5173/
+    ➜  Network: use --host to expose
+    ➜  press h to show help
+    ```
+    
+    Open your browser to `http://localhost:5173`
+  </Step>
+
+  <Step title="Log In and Verify">
+    1. You should see the login page
+    2. Enter the Director credentials you created
+    3. After successful login, you'll see the Dashboard
+    4. Verify that all sections are accessible
+    
+    <Check>
+      If you see the Dashboard with navigation menu, congratulations! Your local development environment is ready.
+    </Check>
+  </Step>
+</Steps>
+
+## Application Structure
+
+Understanding the codebase organization:
+
+```
+pae-inventory/
+├── public/                 # Static assets
+├── src/
+│   ├── components/        # Reusable React components
+│   │   ├── Layout.jsx    # Main layout wrapper
+│   │   ├── PrivateRoute.jsx  # Auth-protected route wrapper
+│   │   ├── GlobalLoader.jsx  # Loading spinner
+│   │   └── ...
+│   ├── pages/            # Page components
+│   │   ├── Login.jsx     # Login page
+│   │   ├── Dashboard.jsx # Main dashboard
+│   │   ├── Products.jsx  # Product management
+│   │   ├── GuiasEntrada.jsx  # Delivery guides
+│   │   ├── AprobarGuias.jsx  # Guide approval (Directors only)
+│   │   ├── RegistroDiario.jsx # Daily operations
+│   │   ├── Porciones.jsx # Portion yield configuration
+│   │   ├── Reportes.jsx  # Reports
+│   │   ├── AuditLog.jsx  # Audit trail viewer
+│   │   ├── Usuarios.jsx  # User management (Directors only)
+│   │   └── DatosPlantel.jsx  # School info
+│   ├── App.jsx           # Main app component with routing
+│   ├── supabaseClient.js # Supabase client and helpers
+│   ├── main.jsx          # Application entry point
+│   └── index.css         # Global styles (Tailwind)
+├── supabase_schema.sql   # Complete database schema
+├── package.json          # Dependencies and scripts
+├── vite.config.js        # Vite configuration
+├── tailwind.config.js    # Tailwind CSS configuration
+├── postcss.config.js     # PostCSS configuration
+└── .env                  # Environment variables (create this)
+```
+
+## Key Files Explained
+
+<AccordionGroup>
+  <Accordion title="src/App.jsx">
+    Main application component that sets up React Router and authentication:
+    
+    ```jsx
+    import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+    import { useState, useEffect } from 'react'
+    import { supabase } from './supabaseClient'
+
+    function App() {
+      const [session, setSession] = useState(null)
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        // Obtener sesión actual
+        supabase.auth.getSession().then(({ data: { session } }) => {
+          setSession(session)
+          setLoading(false)
+        })
+
+        // Escuchar cambios de autenticación
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange((_event, session) => {
+          setSession(session)
+        })
+
+        return () => subscription.unsubscribe()
+      }, [])
+
+      // ... routing logic
+    }
+    ```
+    
+    Defines all application routes including public (login) and private (dashboard, products, etc.) routes.
+  </Accordion>
+  
+  <Accordion title="src/supabaseClient.js">
+    Supabase client initialization and helper functions:
+    
+    ```javascript
+    import { createClient } from '@supabase/supabase-js'
+
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+    const supabaseServiceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY
+
+    // Crear el cliente de Supabase
+    export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+    // Cliente admin para operaciones de administración de usuarios
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey || supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false, storageKey: 'supabase-admin' }
+    })
+    ```
+    
+    Provides helper functions:
+    - `getCurrentUser()` - Get current authenticated user
+    - `getUserData()` - Get user data with role from database
+    - `signOut()` - Log out current user
+    - `getLocalDate()` - Get local date in Venezuela timezone
+    - `createUserAccount()` - Create new user (admin only)
+    - `changeUserPassword()` - Update user password
+  </Accordion>
+  
+  <Accordion title="supabase_schema.sql">
+    Complete PostgreSQL database schema with:
+    - Table definitions for all entities
+    - Row Level Security (RLS) policies
+    - Database triggers for automation
+    - RPC functions for complex operations
+    - Audit logging
+    - Sample data
+    
+    Key sections:
+    - **Tables**: users, products, categories, guia_entrada, input, output, etc.
+    - **Triggers**: Stock updates, audit logging, user protection
+    - **RPC Functions**: `aprobar_guia()`, `rechazar_guia()`, `procesar_operacion_diaria()`, `get_lotes_por_vencer()`
+    - **RLS Policies**: Role-based access control at database level
+    - **Views**: Helpful views for common queries
+  </Accordion>
+  
+  <Accordion title="package.json">
+    Project metadata and dependencies:
+    
+    ```json
+    {
+      "name": "pae-inventory",
+      "private": true,
+      "version": "1.0.0",
+      "type": "module",
+      "description": "Sistema de Inventario del Programa de Alimentación Escolar",
+      "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview"
+      },
+      "dependencies": {
+        "@supabase/supabase-js": "^2.39.0",
+        "lucide-react": "^0.575.0",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.21.0",
+        "sweetalert2": "^11.26.20"
+      },
+      "devDependencies": {
+        "@vitejs/plugin-react": "^4.2.1",
+        "autoprefixer": "^10.4.24",
+        "postcss": "^8.5.6",
+        "tailwindcss": "^3.4.19",
+        "vite": "^5.0.8"
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Available Scripts
+
+Development and build commands:
+
+<CodeGroup>
+```bash Development Server
+npm run dev
+```
+
+```bash Production Build
+npm run build
+```
+
+```bash Preview Production Build
+npm run preview
+```
+</CodeGroup>
+
+<Tabs>
+  <Tab title="npm run dev">
+    Starts the Vite development server with:
+    - Hot Module Replacement (HMR)
+    - Fast refresh for React components
+    - Source maps for debugging
+    - Port 5173 by default
+    
+    Perfect for local development.
+  </Tab>
+  
+  <Tab title="npm run build">
+    Creates an optimized production build:
+    - Minified JavaScript and CSS
+    - Tree-shaking to remove unused code
+    - Asset optimization
+    - Output to `dist/` folder
+    
+    Deploy the `dist/` folder to your hosting provider.
+  </Tab>
+  
+  <Tab title="npm run preview">
+    Preview the production build locally before deploying:
+    - Serves the `dist/` folder
+    - Tests production build
+    - Useful for final verification
+  </Tab>
+</Tabs>
+
+## Environment Variables Reference
+
+All environment variables must be prefixed with `VITE_` to be accessible in the frontend:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `VITE_SUPABASE_URL` | ✅ Yes | Your Supabase project URL (e.g., `https://xxxxx.supabase.co`) |
+| `VITE_SUPABASE_ANON_KEY` | ✅ Yes | Supabase anonymous/public API key (safe for client-side) |
+| `VITE_SUPABASE_SERVICE_ROLE_KEY` | ⚠️ Recommended | Service role key for admin operations (user creation, password reset) |
+
+<Warning>
+  **Never commit `.env` to version control!** Add it to `.gitignore`:
+  
+  ```gitignore
+  # Environment variables
+  .env
+  .env.local
+  .env.production
+  ```
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Faltan variables de entorno de Supabase">
+    **Problem**: Missing or incorrectly named environment variables.
+    
+    **Solution**:
+    1. Verify `.env` file exists in project root
+    2. Check variable names start with `VITE_`
+    3. Restart the dev server after changing `.env`
+    4. Verify no typos in variable names
+  </Accordion>
+  
+  <Accordion title="Login fails with 'Invalid credentials'">
+    **Problem**: User not found or wrong password.
+    
+    **Solution**:
+    1. Verify user exists in Supabase Auth → Users
+    2. Check that user is confirmed (not pending)
+    3. Verify user exists in `users` table with correct `id_user`
+    4. Reset password in Supabase dashboard if needed
+  </Accordion>
+  
+  <Accordion title="Database schema errors when running SQL">
+    **Problem**: Schema already exists or syntax errors.
+    
+    **Solution**:
+    1. If updating: Tables may already exist (script uses `IF NOT EXISTS`)
+    2. Run in SQL Editor, not in migrations
+    3. Check PostgreSQL version compatibility (Supabase uses PostgreSQL 15)
+    4. Look for specific error messages in Supabase logs
+  </Accordion>
+  
+  <Accordion title="RLS policy errors when accessing data">
+    **Problem**: Row Level Security blocking access.
+    
+    **Solution**:
+    1. Verify user has correct `id_rol` in `users` table
+    2. Check RLS policies are enabled on all tables
+    3. Review policy definitions in schema
+    4. Test with Director role (has broadest access)
+  </Accordion>
+  
+  <Accordion title="Port 5173 already in use">
+    **Problem**: Another process is using the default Vite port.
+    
+    **Solution**:
+    ```bash
+    # Use a different port
+    npm run dev -- --port 3000
+    ```
+    
+    Or kill the process using port 5173:
+    ```bash
+    # Find the process
+    lsof -ti:5173
+    # Kill it
+    kill -9 $(lsof -ti:5173)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Deployment
+
+When you're ready to deploy to production:
+
+<Steps>
+  <Step title="Build for Production">
+    ```bash
+    npm run build
+    ```
+    
+    This creates optimized files in the `dist/` directory.
+  </Step>
+  
+  <Step title="Configure Production Environment">
+    Set environment variables in your hosting platform (Vercel, Netlify, etc.):
+    - `VITE_SUPABASE_URL`
+    - `VITE_SUPABASE_ANON_KEY`
+    - `VITE_SUPABASE_SERVICE_ROLE_KEY`
+  </Step>
+  
+  <Step title="Deploy Static Files">
+    Upload the `dist/` folder to your hosting provider or use their CLI/Git integration.
+    
+    <Tip>
+      Popular options: Vercel, Netlify, AWS Amplify, GitHub Pages (with GitHub Actions)
+    </Tip>
+  </Step>
+  
+  <Step title="Configure Supabase for Production">
+    1. Update **Authentication** → **URL Configuration**:
+       - Add your production domain to **Site URL**
+       - Add to **Redirect URLs**
+    2. Review **RLS policies** are enabled
+    3. Verify **API keys** are set correctly
+  </Step>
+</Steps>
+
+<Warning>
+  In production, consider:
+  - Using a custom domain with HTTPS
+  - Setting up monitoring and error tracking
+  - Configuring database backups in Supabase
+  - Implementing rate limiting
+  - Regular security audits
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start Guide" icon="rocket" href="/quickstart">
+    Learn how to use the system
+  </Card>
+  
+  <Card title="User Management" icon="users" href="/admin/user-management">
+    Create and manage user accounts
+  </Card>
+  
+  <Card title="Database Schema" icon="database" href="/database/overview">
+    Deep dive into the database structure
+  </Card>
+  
+  <Card title="Security" icon="shield" href="/database/security">
+    Understand security features and RLS policies
+  </Card>
+</CardGroup>
+
+<Check>
+  Development environment ready! Start building and testing features locally.
+</Check>

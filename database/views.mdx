@@ -1,0 +1,317 @@
+---
+title: 'Database Views'
+description: 'Predefined views for inventory and operational reporting'
+icon: 'table'
+---
+
+## Overview
+
+The PAE Inventory System includes several database views that provide convenient, pre-filtered access to commonly queried data. These views simplify frontend queries and ensure consistent business logic.
+
+## productos_stock_bajo
+
+Identifies products with critically low stock levels.
+
+### Definition
+
+```sql
+CREATE OR REPLACE VIEW productos_stock_bajo AS
+SELECT
+    p.id_product,
+    p.product_name,
+    p.stock,
+    p.unit_measure,
+    c.category_name
+FROM product p
+LEFT JOIN category c ON p.id_category = c.id_category
+WHERE p.stock < 10
+ORDER BY p.stock ASC;
+```
+
+### Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id_product` | INTEGER | Product identifier |
+| `product_name` | TEXT | Product name |
+| `stock` | NUMERIC(10,2) | Current stock quantity |
+| `unit_measure` | TEXT | Unit of measure (kg, lt, unidades) |
+| `category_name` | TEXT | Associated category name |
+
+### Business Logic
+
+- **Threshold**: Stock < 10 units
+- **Ordering**: Lowest stock first (ascending)
+- **Purpose**: Alert dashboard and procurement planning
+
+### Usage Example
+
+```typescript
+const { data, error } = await supabase
+  .from('productos_stock_bajo')
+  .select('*');
+
+// Returns only products below the critical threshold
+```
+
+### Notes
+
+<Info>
+  The threshold of 10 units is hardcoded in the view. For dynamic thresholds, query the `inventario_actual` view with a WHERE clause instead.
+</Info>
+
+---
+
+## inventario_actual
+
+Provides complete inventory overview with categorized stock levels.
+
+### Definition
+
+```sql
+CREATE OR REPLACE VIEW inventario_actual AS
+SELECT
+    p.id_product,
+    p.product_name,
+    p.stock,
+    p.unit_measure,
+    c.category_name,
+    CASE
+        WHEN p.stock < 10 THEN 'BAJO'
+        WHEN p.stock < 50 THEN 'MEDIO'
+        ELSE 'SUFICIENTE'
+    END as nivel_stock
+FROM product p
+LEFT JOIN category c ON p.id_category = c.id_category
+ORDER BY c.category_name, p.product_name;
+```
+
+### Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id_product` | INTEGER | Product identifier |
+| `product_name` | TEXT | Product name |
+| `stock` | NUMERIC(10,2) | Current stock quantity |
+| `unit_measure` | TEXT | Unit of measure |
+| `category_name` | TEXT | Category name |
+| `nivel_stock` | TEXT | Stock level indicator |
+
+### Stock Level Classification
+
+| Range | nivel_stock | Meaning |
+|-------|------------|----------|
+| stock < 10 | BAJO | Critical - immediate action required |
+| 10 ≤ stock < 50 | MEDIO | Moderate - monitor closely |
+| stock ≥ 50 | SUFICIENTE | Adequate - normal operations |
+
+### Ordering
+
+Results are sorted by:
+1. Category name (alphabetical)
+2. Product name (alphabetical)
+
+### Usage Example
+
+```typescript
+// Get all products with low or medium stock
+const { data, error } = await supabase
+  .from('inventario_actual')
+  .select('*')
+  .in('nivel_stock', ['BAJO', 'MEDIO']);
+
+// Get inventory grouped by category
+const { data: inventory } = await supabase
+  .from('inventario_actual')
+  .select('*');
+
+const byCategory = inventory.reduce((acc, item) => {
+  const cat = item.category_name || 'Sin categoría';
+  if (!acc[cat]) acc[cat] = [];
+  acc[cat].push(item);
+  return acc;
+}, {});
+```
+
+---
+
+## guias_pendientes
+
+Shows entry guides awaiting approval (maker-checker workflow).
+
+### Definition
+
+```sql
+CREATE OR REPLACE VIEW guias_pendientes AS
+SELECT
+    g.*,
+    u.full_name as creador_nombre,
+    COUNT(i.id_input) as total_productos
+FROM guia_entrada g
+LEFT JOIN users u ON g.created_by = u.id_user
+LEFT JOIN input i ON g.id_guia = i.id_guia
+WHERE g.estado = 'Pendiente'
+GROUP BY g.id_guia, u.full_name
+ORDER BY g.fecha DESC, g.created_at DESC;
+```
+
+### Key Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id_guia` | INTEGER | Guide identifier |
+| `numero_guia_sunagro` | TEXT | SUNAGRO guide number |
+| `numero_guia_sisecal` | TEXT | SISECAL guide number |
+| `fecha` | DATE | Guide date |
+| `vocera_nombre` | TEXT | Spokesperson name |
+| `telefono_vocera` | TEXT | Spokesperson phone |
+| `notas` | TEXT | Additional notes |
+| `estado` | TEXT | Always 'Pendiente' (view filter) |
+| `created_by` | UUID | Creator user ID |
+| `created_at` | TIMESTAMPTZ | Creation timestamp |
+| `creador_nombre` | TEXT | Creator's full name |
+| `total_productos` | BIGINT | Count of products in guide |
+
+### Business Logic
+
+- **Filter**: Only guides with `estado = 'Pendiente'`
+- **Aggregation**: Counts associated input records
+- **Ordering**: Most recent guides first (by date, then creation time)
+
+### Usage Example
+
+```typescript
+// Get all pending guides for approval queue
+const { data, error } = await supabase
+  .from('guias_pendientes')
+  .select('*');
+
+// Display in UI:
+data.forEach(guide => {
+  console.log(`${guide.numero_guia_sunagro}: ${guide.total_productos} productos`);
+  console.log(`Creado por: ${guide.creador_nombre}`);
+});
+```
+
+### Maker-Checker Workflow
+
+1. **Maker** (Madre Procesadora): Creates guide via INSERT into `guia_entrada`
+2. **Queue**: Guide appears in `guias_pendientes` view
+3. **Checker** (Director): Reviews and calls `aprobar_guia()` or `rechazar_guia()`
+4. **Result**: Guide moves to `historial_aprobaciones` view
+
+---
+
+## historial_aprobaciones
+
+Archive of processed guides (approved or rejected).
+
+### Definition
+
+```sql
+CREATE OR REPLACE VIEW historial_aprobaciones AS
+SELECT
+    g.*,
+    u_creador.full_name as creador_nombre,
+    u_aprobador.full_name as aprobador_nombre,
+    COUNT(i.id_input) as total_productos
+FROM guia_entrada g
+LEFT JOIN users u_creador ON g.created_by = u_creador.id_user
+LEFT JOIN users u_aprobador ON g.aprobado_por = u_aprobador.id_user
+LEFT JOIN input i ON g.id_guia = i.id_guia
+WHERE g.estado IN ('Aprobada', 'Rechazada')
+GROUP BY g.id_guia, u_creador.full_name, u_aprobador.full_name
+ORDER BY g.fecha_aprobacion DESC;
+```
+
+### Key Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id_guia` | INTEGER | Guide identifier |
+| `numero_guia_sunagro` | TEXT | SUNAGRO guide number |
+| `estado` | TEXT | 'Aprobada' or 'Rechazada' |
+| `aprobado_por` | UUID | Approver user ID |
+| `fecha_aprobacion` | TIMESTAMPTZ | Approval/rejection timestamp |
+| `comentarios_aprobacion` | TEXT | Approval comments or rejection reason |
+| `created_by` | UUID | Creator user ID |
+| `creador_nombre` | TEXT | Creator's full name |
+| `aprobador_nombre` | TEXT | Approver's full name |
+| `total_productos` | BIGINT | Count of products in guide |
+
+### Business Logic
+
+- **Filter**: Guides with estado IN ('Aprobada', 'Rechazada')
+- **Joins**: Resolves both creator and approver user names
+- **Ordering**: Most recent approvals first
+
+### Usage Example
+
+```typescript
+// Get approval history with filters
+const { data, error } = await supabase
+  .from('historial_aprobaciones')
+  .select('*')
+  .eq('estado', 'Aprobada')
+  .gte('fecha_aprobacion', '2026-03-01')
+  .lte('fecha_aprobacion', '2026-03-31');
+
+// Audit report: who approved what
+const auditReport = data.map(g => ({
+  guide: g.numero_guia_sunagro,
+  creator: g.creador_nombre,
+  approver: g.aprobador_nombre,
+  date: g.fecha_aprobacion,
+  products: g.total_productos,
+  comments: g.comentarios_aprobacion
+}));
+```
+
+### Audit Trail
+
+This view provides accountability for the maker-checker process:
+
+- **Who created** the entry guide
+- **Who approved/rejected** it
+- **When** the decision was made
+- **Why** (via comentarios_aprobacion)
+
+<Tip>
+  For detailed change history, query the `audit_log` table with `table_affected = 'guia_entrada'` and `action_type IN ('APPROVE', 'REJECT')`.
+</Tip>
+
+## View Permissions
+
+All views respect the underlying table's Row Level Security (RLS) policies. Since all tables have policies allowing SELECT for authenticated users:
+
+```sql
+CREATE POLICY "[Table]: Todos pueden ver" ON [table] 
+  FOR SELECT USING (true);
+```
+
+Views are automatically accessible to all authenticated users without additional grants.
+
+## Performance Considerations
+
+### Indexes
+
+Relevant indexes supporting these views:
+
+- `idx_guia_entrada_estado` on `guia_entrada(estado)` - speeds up guias_pendientes and historial_aprobaciones
+- `idx_input_lotes_detalle` (GIN) on `input(lotes_detalle)` - used by get_lotes_por_vencer RPC
+
+### View Materialization
+
+Currently all views are **non-materialized**, meaning they execute the underlying query on every access. For high-traffic scenarios, consider:
+
+```sql
+-- Convert to materialized view (requires manual refresh)
+CREATE MATERIALIZED VIEW inventario_actual_mv AS ...
+
+-- Refresh periodically
+REFRESH MATERIALIZED VIEW inventario_actual_mv;
+```
+
+<Warning>
+  Materialized views improve read performance but require explicit refresh and don't reflect real-time changes.
+</Warning>

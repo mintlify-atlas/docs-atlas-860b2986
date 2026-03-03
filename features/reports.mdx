@@ -1,0 +1,353 @@
+---
+title: Reports & Analytics
+description: Generate and export inventory reports across multiple dimensions
+icon: 'chart-simple'
+---
+
+The Reports module provides comprehensive analytics and export capabilities for inventory data. All reports can be exported to CSV format for further analysis in spreadsheet applications.
+
+## Report Types
+
+The system offers five different report categories:
+
+### 1. Stock Actual (Current Stock)
+
+Shows current inventory levels for all products.
+
+<ParamField path="reportType" type="select" default="stock">
+  Stock actual
+</ParamField>
+
+**Columns**:
+- **Rubro**: Product name
+- **Categoría**: Product category
+- **Stock**: Current quantity with unit
+- **Estado**: Stock status badge (BAJO / MEDIO / OK)
+
+**Data source**:
+```sql
+SELECT product.*, category.category_name
+FROM product
+LEFT JOIN category ON product.id_category = category.id_category
+ORDER BY stock DESC
+```
+
+**Status badges**:
+- **BAJO** (Red): `stock < 10`
+- **MEDIO** (Amber): `stock >= 10 AND stock < 50`
+- **OK** (Green): `stock >= 50`
+
+### 2. Entradas (Entry Guides)
+
+Displays all inventory entries from approved guides within a date range.
+
+<ParamField path="reportType" type="select">
+  Entradas (guías)
+</ParamField>
+
+<ParamField path="dateRange.desde" type="date" required>
+  Start date filter
+  
+  **Default**: First day of current month
+</ParamField>
+
+<ParamField path="dateRange.hasta" type="date" required>
+  End date filter
+  
+  **Default**: Today
+</ParamField>
+
+**Columns**:
+- **Fecha**: Entry date
+- **Guía**: SUNAGRO guide number
+- **Rubro**: Product name
+- **Cantidad**: Amount received with unit
+
+**Data source**:
+```sql
+SELECT input.*, product.product_name, product.unit_measure,
+       guia_entrada.numero_guia_sunagro, guia_entrada.fecha
+FROM input
+JOIN product ON input.id_product = product.id_product
+LEFT JOIN guia_entrada ON input.id_guia = guia_entrada.id_guia
+WHERE input.fecha BETWEEN p_desde AND p_hasta
+ORDER BY input.fecha DESC
+```
+
+### 3. Salidas (Outputs/Consumption)
+
+Shows all inventory deductions (typically from daily operations).
+
+<ParamField path="reportType" type="select">
+  Salidas (menús)
+</ParamField>
+
+**Date range**: Same as Entradas
+
+**Columns**:
+- **Fecha**: Consumption date
+- **Rubro**: Product name
+- **Cantidad**: Amount consumed with unit
+- **Motivo**: Reason (e.g., "Almuerzo - 774 alumnos")
+
+**Data source**:
+```sql
+SELECT output.*, product.product_name, product.unit_measure
+FROM output
+JOIN product ON output.id_product = product.id_product
+WHERE output.fecha BETWEEN p_desde AND p_hasta
+ORDER BY output.fecha DESC
+```
+
+### 4. Lotes por Vencer (Expiring Batches)
+
+Lists all batches approaching expiration within the next 365 days, sorted by expiration date.
+
+<ParamField path="reportType" type="select">
+  Lotes por vencer
+</ParamField>
+
+**No date filter**: Fixed to next 365 days
+
+**Columns**:
+- **Rubro**: Product name
+- **Cantidad Lote**: Batch quantity
+- **Stock Total**: Total product stock
+- **Vencimiento**: Expiration date
+- **Días restantes**: Days until expiration with badge
+
+**Badge colors**:
+- **VENCIDO** (Red): `dias_restantes < 0`
+- **X días** (Red badge): `dias_restantes <= 7`
+- **X días** (Amber badge): `dias_restantes <= 30`
+- **X días** (No badge): `dias_restantes > 30`
+
+**Data source**:
+```sql
+-- Uses RPC function
+SELECT * FROM get_lotes_por_vencer(365)
+ORDER BY fecha_vencimiento ASC
+```
+
+This function queries the `lotes_detalle` JSONB field in approved entry guides:
+
+```sql
+SELECT
+  p.product_name,
+  (lote->>'cantidad')::NUMERIC AS cantidad_lote,
+  p.stock,
+  (lote->>'fecha_vencimiento')::DATE AS fecha_vencimiento,
+  ((lote->>'fecha_vencimiento')::DATE - CURRENT_DATE) AS dias_restantes
+FROM input i
+JOIN guia_entrada g ON i.id_guia = g.id_guia
+JOIN product p ON i.id_product = p.id_product
+CROSS JOIN LATERAL jsonb_array_elements(i.lotes_detalle) AS lote
+WHERE g.estado = 'Aprobada'
+  AND (lote->>'fecha_vencimiento')::DATE <= CURRENT_DATE + 365
+```
+
+### 5. Consumo por Rubro (Consumption by Product)
+
+Aggregates total consumption per product within a date range.
+
+<ParamField path="reportType" type="select">
+  Consumo por rubro
+</ParamField>
+
+**Date range**: Uses filter
+
+**Columns**:
+- **Rubro**: Product name
+- **Total consumido**: Sum of all consumption
+- **Veces usado**: Number of times the product was used
+- **Promedio por uso**: Average quantity per use
+
+**Data source**:
+
+The report queries `menu_diario` and `menu_detalle` (legacy tables) and groups by product:
+
+```sql
+SELECT 
+  product.product_name,
+  SUM(menu_detalle.cantidad_real_usada) AS total,
+  COUNT(*) AS veces
+FROM menu_diario
+JOIN menu_detalle ON menu_diario.id_menu = menu_detalle.id_menu
+JOIN product ON menu_detalle.id_product = product.id_product
+WHERE menu_diario.fecha BETWEEN p_desde AND p_hasta
+GROUP BY product.id_product, product.product_name
+```
+
+<Info>
+  **Note**: This report currently uses legacy `menu_diario`/`menu_detalle` tables. For systems using the newer `registro_diario` workflow, consumption data comes from the `output` table instead.
+</Info>
+
+## CSV Export
+
+All reports can be exported to CSV format using the **"Exportar a CSV"** button.
+
+### Export Features
+
+<CardGroup cols={2}>
+  <Card title="UTF-8 BOM" icon="file-csv">
+    Files include UTF-8 BOM (`\uFEFF`) for proper character encoding in Excel
+  </Card>
+  <Card title="Auto-filename" icon="signature">
+    Format: `reporte_{type}_{date}.csv`
+    
+    Example: `reporte_stock_2026-03-03.csv`
+  </Card>
+  <Card title="Quoted Fields" icon="quote-left">
+    Text fields are quoted to handle commas and special characters
+  </Card>
+  <Card title="Browser Download" icon="download">
+    Uses Blob API with auto-download link
+  </Card>
+</CardGroup>
+
+### CSV Structure Examples
+
+#### Stock Report
+
+```csv
+Rubro,Categoría,Stock,Unidad
+"Arroz","Carbohidratos",85.50,kg
+"Aceite de girasol","Aceites y grasas",20.50,lt
+"Pollo","Proteinas",12.30,kg
+```
+
+#### Entradas Report
+
+```csv
+Fecha,Guía,Rubro,Cantidad,Unidad
+2026-03-01,"91","Arroz",100.00,kg
+2026-03-01,"91","Aceite de girasol",25.00,lt
+```
+
+#### Vencimientos Report
+
+```csv
+Rubro,Cantidad Lote,Stock Total,Vencimiento,Días restantes
+"Leche en polvo",15.00,15.00,2026-03-15,12
+"Arroz",45.50,85.50,2026-09-15,196
+```
+
+## Report UI
+
+### Filter Panel
+
+The filter card shows:
+
+```jsx
+<Card>
+  <FormGroup>
+    <Label>Tipo de reporte</Label>
+    <Select options={reportTypes} />
+  </FormGroup>
+  
+  {/* Date filters for applicable reports */}
+  {needsDateRange && (
+    <>
+      <FormGroup>
+        <Label>Desde</Label>
+        <DateInput />
+      </FormGroup>
+      <FormGroup>
+        <Label>Hasta</Label>
+        <DateInput />
+      </FormGroup>
+    </>
+  )}
+  
+  <Button onClick={exportToCSV}>
+    📥 Exportar a CSV
+  </Button>
+</Card>
+```
+
+### Data Table
+
+Report data displays in a responsive table with:
+
+- **Loading state**: `<GlobalLoader text="Generando reporte..." />`
+- **Empty state**: "No hay datos para este reporte"
+- **Overflow handling**: `overflow-x-auto` wrapper for horizontal scroll
+
+### Table Styling
+
+- **Font weight**: Product names shown in bold (`font-semibold`)
+- **Text size**: Secondary info in smaller font (`text-sm`)
+- **Badges**: Color-coded status indicators
+- **Alignment**: Numeric data right-aligned
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Inventory Audits" icon="clipboard-check">
+    Export current stock for physical count verification and reconciliation
+  </Card>
+  <Card title="Procurement Planning" icon="cart-shopping">
+    Analyze consumption patterns to forecast reorder quantities and timing
+  </Card>
+  <Card title="Waste Prevention" icon="recycle">
+    Monitor expiring batches to prioritize usage and minimize losses
+  </Card>
+  <Card title="Budget Reporting" icon="chart-pie">
+    Track entry guide data for budget compliance and government reporting
+  </Card>
+  <Card title="Consumption Analysis" icon="magnifying-glass-chart">
+    Identify high-usage items and optimize portion recipes
+  </Card>
+  <Card title="Historical Trends" icon="timeline">
+    Compare consumption across date ranges to identify seasonal patterns
+  </Card>
+</CardGroup>
+
+## Technical Details
+
+<Info>
+  **File location**: `src/pages/Reportes.jsx:1-386`
+</Info>
+
+### Key Functions
+
+- **loadReport()**: Dispatcher that calls appropriate report loader based on `reportType`
+- **loadStockReport()**: Fetches current inventory with categories
+- **loadEntradasReport()**: Queries input table with date filter
+- **loadSalidasReport()**: Queries output table with date filter
+- **loadVencimientosReport()**: Calls `get_lotes_por_vencer` RPC
+- **loadConsumoReport()**: Aggregates menu_detalle data
+- **exportToCSV()**: Generates CSV file with UTF-8 BOM and triggers download
+
+### State Management
+
+```javascript
+const [reportType, setReportType] = useState('stock')
+const [reportData, setReportData] = useState([])
+const [dateRange, setDateRange] = useState({
+  desde: getFirstDayOfMonth(),
+  hasta: getLocalDate()
+})
+```
+
+### Report Auto-reload
+
+```javascript
+useEffect(() => {
+  loadReport()
+}, [reportType, dateRange])
+```
+
+Reports refresh automatically when:
+- Report type changes
+- Date range is modified
+
+## Performance Considerations
+
+<Warning>
+  **Large datasets**: The Vencimientos report scans all JSONB batch data. Consider pagination for systems with thousands of batches.
+</Warning>
+
+<Tip>
+  **Date range limits**: For Entradas and Salidas reports, use narrow date ranges (e.g., one month) for faster queries on large datasets.
+</Tip>

@@ -1,0 +1,314 @@
+---
+title: 'Managing Products and Inventory'
+description: 'How to create, update, and manage inventory items in the PAE system'
+icon: 'box'
+---
+
+## Overview
+
+Products (also called "rubros" in the system) are the core inventory items tracked by the PAE system. Each product has a current stock level, unit of measurement, and optional category classification.
+
+<Note>
+**Required Role:** Director or Madre Procesadora
+
+Supervisors have read-only access and cannot create or modify products.
+</Note>
+
+## Product Structure
+
+Each product contains the following information:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| Product Name | Text | ✓ | Unique name for the item (e.g., "Arroz", "Aceite de girasol") |
+| Stock | Decimal | Auto | Current inventory quantity (updated automatically) |
+| Unit of Measure | Select | ✓ | kg, lt, or unidades |
+| Category | Select | Optional | Classification (Lacteos, Proteinas, etc.) |
+| Description | Text | Optional | Additional notes about the product |
+
+## Creating a New Product
+
+<Steps>
+  <Step title="Open the Products page">
+    Navigate to **Inventario > Rubros** from the main menu.
+  </Step>
+  
+  <Step title="Click 'Nuevo Rubro'">
+    Click the **+ Nuevo Rubro** button in the top-right corner. The product creation form will appear.
+  </Step>
+  
+  <Step title="Fill in product details">
+    Enter the required information:
+    
+    - **Nombre del rubro**: Enter a unique, descriptive name
+    - **Unidad de medida**: Select from:
+      - `kg` - Kilogramos (for dry goods, produce)
+      - `lt` - Litros (for liquids)
+      - `unidades` - Units (for countable items)
+    - **Categoría** (optional): Choose the appropriate category:
+      - Lacteos (dairy)
+      - Proteinas (proteins)
+      - Carbohidratos (carbohydrates)
+      - Legumbres (legumes)
+      - Vegetales (vegetables)
+      - Frutas (fruits)
+      - Aceites y grasas (oils and fats)
+      - Condimentos (condiments)
+      - Otros (other)
+    - **Descripción** (optional): Add any relevant notes
+  </Step>
+  
+  <Step title="Save the product">
+    Click **Guardar** to create the product. The new item will appear in the inventory list with an initial stock of 0.
+  </Step>
+</Steps>
+
+### Example from Code (Products.jsx:71-98)
+
+```javascript
+const handleSubmit = async (e) => {
+  e.preventDefault()
+  setLoading(true)
+
+  try {
+    const dataToSubmit = {
+      product_name: formData.product_name,
+      unit_measure: formData.unit_measure,
+      description: formData.description || null,
+      id_category: formData.id_category ? parseInt(formData.id_category) : null
+    }
+
+    if (editingProduct) {
+      const { error } = await supabase
+        .from('product')
+        .update(dataToSubmit)
+        .eq('id_product', editingProduct.id_product)
+
+      if (error) throw error
+      notifySuccess('Rubro actualizado', 'Los cambios se guardaron correctamente')
+    } else {
+      const { error } = await supabase
+        .from('product')
+        .insert(dataToSubmit)
+
+      if (error) throw error
+      notifySuccess('Rubro creado', 'El rubro se registró correctamente')
+    }
+
+    resetForm()
+    loadProducts()
+  } catch (error) {
+    console.error('Error guardando rubro:', error)
+    notifyError('Error al guardar', error.message)
+  } finally {
+    setLoading(false)
+  }
+}
+```
+
+## Updating a Product
+
+<Steps>
+  <Step title="Locate the product">
+    Find the product in the inventory table. You can scroll or use browser search (Ctrl+F).
+  </Step>
+  
+  <Step title="Click 'Editar'">
+    Click the **Editar** button (pencil icon) next to the product.
+  </Step>
+  
+  <Step title="Modify the information">
+    Update any fields as needed. The stock value cannot be edited manually - it updates automatically through entry guides and daily operations.
+  </Step>
+  
+  <Step title="Save changes">
+    Click **Guardar** to save your changes.
+  </Step>
+</Steps>
+
+<Warning>
+Changing the unit of measure on an existing product can cause confusion. Only do this if the product truly needs a different measurement unit.
+</Warning>
+
+## Deleting a Product
+
+<Note>
+**Required Role:** Director only
+
+Madre Procesadora users cannot delete products.
+</Note>
+
+<Steps>
+  <Step title="Click the delete button">
+    Click the trash icon next to the product you want to delete.
+  </Step>
+  
+  <Step title="Confirm deletion">
+    A confirmation dialog will appear. Confirm if you're sure.
+  </Step>
+</Steps>
+
+### Delete Protection (Products.jsx:121-142)
+
+Products that are referenced in entry guides, daily operations, or portion configurations **cannot be deleted**:
+
+```javascript
+const handleDelete = async (id) => {
+  const confirmed = await confirmDanger('¿Eliminar rubro?', 'Esta acción no se puede deshacer')
+  if (!confirmed) return
+
+  try {
+    const { error } = await supabase
+      .from('product')
+      .delete()
+      .eq('id_product', id)
+
+    if (error) throw error
+    notifySuccess('Eliminado', 'El rubro fue eliminado')
+    loadProducts()
+  } catch (error) {
+    console.error('Error eliminando rubro:', error)
+    if (error.code === '23503' || error.status === 409) {
+      notifyError('No se puede eliminar', 'Este rubro ya está siendo usado en Porciones, Entradas o Salidas. Para mantener el historial, no debe borrarse.')
+    } else {
+      notifyError('Error al eliminar', error.message)
+    }
+  }
+}
+```
+
+<Tip>
+If you need to discontinue a product, leave it in the system with zero stock instead of deleting it. This preserves historical data.
+</Tip>
+
+## Stock Level Indicators
+
+The system automatically displays color-coded stock level badges:
+
+| Badge | Stock Level | Meaning |
+|-------|-------------|----------|
+| <span style={{color: '#dc2626', fontWeight: 'bold'}}>BAJO</span> | < 10 units | Critical - reorder immediately |
+| <span style={{color: '#f59e0b', fontWeight: 'bold'}}>MEDIO</span> | 10-49 units | Monitor - may need restocking soon |
+| <span style={{color: '#10b981', fontWeight: 'bold'}}>OK</span> | ≥ 50 units | Sufficient stock |
+
+### Stock Badge Logic (Products.jsx:155-159)
+
+```javascript
+const getStockBadge = (stock) => {
+  if (stock < 10) return <span className="badge badge-danger">BAJO</span>
+  if (stock < 50) return <span className="badge badge-warning">MEDIO</span>
+  return <span className="badge badge-success">OK</span>
+}
+```
+
+## How Stock is Updated
+
+Stock levels are **automatically updated** by the system - you cannot edit stock directly:
+
+### Stock Increases
+- When a **Director approves** an entry guide (guía de entrada)
+- Quantities from approved guides are added to stock
+- See: [Entry Approval Workflow](/guides/entry-approval-workflow)
+
+### Stock Decreases
+- When a **daily operation** is registered (registro diario)
+- The system uses FIFO to consume batches and deduct from stock
+- See: [FIFO System](/guides/fifo-system)
+
+### Automatic Stock Trigger (supabase_schema.sql:293-322)
+
+```sql
+CREATE OR REPLACE FUNCTION update_stock_on_output()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_stock_actual NUMERIC(10,2);
+BEGIN
+    SELECT stock INTO v_stock_actual
+    FROM product
+    WHERE id_product = NEW.id_product
+    FOR UPDATE;
+
+    IF v_stock_actual < NEW.amount THEN
+        RAISE EXCEPTION 'Stock insuficiente para el producto %. Stock actual: %, solicitado: %',
+            NEW.id_product, v_stock_actual, NEW.amount;
+    END IF;
+
+    UPDATE product
+    SET stock = stock - NEW.amount
+    WHERE id_product = NEW.id_product;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+This trigger ensures:
+- Stock cannot go negative
+- Updates are atomic (locked during transaction)
+- Errors are raised if insufficient stock
+
+## Product Categories
+
+The system includes 9 predefined categories (supabase_schema.sql:55-65):
+
+```sql
+INSERT INTO category (category_name, description) VALUES
+    ('Lacteos', 'Leche, queso, yogurt'),
+    ('Proteinas', 'Carne, pollo, pescado, huevos'),
+    ('Carbohidratos', 'Arroz, pasta, pan, harina'),
+    ('Legumbres', 'Caraotas, lentejas, arvejas'),
+    ('Vegetales', 'Verduras y hortalizas'),
+    ('Frutas', 'Frutas frescas'),
+    ('Aceites y grasas', 'Aceite, mantequilla'),
+    ('Condimentos', 'Sal, especias, salsas'),
+    ('Otros', 'Productos varios')
+ON CONFLICT (category_name) DO NOTHING;
+```
+
+Categories help organize inventory but are **optional** - products can exist without a category.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use consistent naming">
+    Use clear, standardized names:
+    - ✓ "Arroz blanco"
+    - ✓ "Aceite de girasol"
+    - ✗ "arroz" (too generic)
+    - ✗ "ACEITE!!!" (inconsistent formatting)
+  </Accordion>
+  
+  <Accordion title="Choose the right unit of measure">
+    Select the unit that matches how the product is received and used:
+    - Rice, flour → `kg`
+    - Oil, milk → `lt`
+    - Eggs, individual fruits → `unidades`
+  </Accordion>
+  
+  <Accordion title="Don't delete products with history">
+    If a product is no longer used, leave it in the system with zero stock. Deleting removes valuable historical data.
+  </Accordion>
+  
+  <Accordion title="Configure portions after creating products">
+    After adding a new product, configure its portion yield in **Configuración > Porciones** so it can be used in daily operations.
+    
+    See: [Portion Management](/guides/portion-management)
+  </Accordion>
+</AccordionGroup>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Portion Management" icon="utensils" href="/guides/portion-management">
+    Configure how many servings each product yields
+  </Card>
+  <Card title="Entry Approval Workflow" icon="check-circle" href="/guides/entry-approval-workflow">
+    How inventory is added through approved entry guides
+  </Card>
+  <Card title="FIFO System" icon="layer-group" href="/guides/fifo-system">
+    How batch tracking ensures oldest items are used first
+  </Card>
+  <Card title="Daily Operations" icon="calendar-check" href="/guides/daily-attendance">
+    How stock is consumed during daily meal service
+  </Card>
+</CardGroup>

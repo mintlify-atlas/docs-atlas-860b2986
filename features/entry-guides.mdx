@@ -1,0 +1,330 @@
+---
+title: Entry Guides
+description: Register incoming inventory deliveries with batch tracking and approval workflow
+icon: 'clipboard-list'
+---
+
+Entry Guides (Guías de Entrada CNAE) are the primary mechanism for registering incoming inventory from government food program deliveries. All entries require Director approval before updating inventory stock.
+
+## Approval Workflow System
+
+<Steps>
+  <Step title="Creation">
+    Madre Procesadora or Director registers a new entry guide with delivery details and product batches. Status: **Pendiente**
+  </Step>
+  <Step title="Review">
+    Director reviews the guide details, product quantities, and batch information in the approval interface
+  </Step>
+  <Step title="Approval/Rejection">
+    Director either:
+    - **Approves**: Inventory stock updates automatically
+    - **Rejects**: Guide marked rejected with reason, no inventory change
+  </Step>
+</Steps>
+
+<Info>
+  **Important**: Inventory stock does NOT update when the guide is created. It only updates after Director approval.
+</Info>
+
+## Creating an Entry Guide
+
+### Header Information
+
+<ParamField path="numero_guia_sunagro" type="string" required>
+  SUNAGRO guide number (unique identifier)
+  
+  **Validation**: Must be unique in the system. Duplicate guide numbers are rejected.
+</ParamField>
+
+<ParamField path="numero_guia_sisecal" type="string">
+  SISECAL guide number (optional secondary reference)
+</ParamField>
+
+<ParamField path="fecha" type="date" required>
+  Delivery date
+  
+  **Default**: Current date using `getLocalDate()`
+</ParamField>
+
+<ParamField path="vocera_nombre" type="string" required>
+  Name of the vocera (community representative) who received the delivery
+  
+  **Example**: "María Villalobos"
+</ParamField>
+
+<ParamField path="telefono_vocera" type="string">
+  Contact phone number
+  
+  **Format**: Venezuelan phone format (e.g., "0412-XXX-XXXX")
+</ParamField>
+
+<ParamField path="notas" type="textarea">
+  General observations about the delivery
+</ParamField>
+
+### Product Details (Rubros Recibidos)
+
+Each entry guide can include multiple products. For each product:
+
+<ParamField path="id_product" type="select" required>
+  Product selection from catalog
+  
+  **Validation**: Cannot select the same product twice in one guide
+</ParamField>
+
+<ParamField path="amount" type="number" required>
+  Total quantity received
+  
+  **Format**: Decimal with 2 places (e.g., 100.50)
+</ParamField>
+
+<ParamField path="unit_amount" type="integer">
+  Number of physical packages/bags/boxes
+  
+  **Purpose**: Track bulk packaging (e.g., "10 sacos")
+</ParamField>
+
+### Batch Tracking (Lotes)
+
+<Warning>
+  **Batch tracking is mandatory**. Every product must have at least one batch with quantity and expiration date.
+</Warning>
+
+For each batch within a product:
+
+<ParamField path="cantidad" type="number" required>
+  Quantity in this batch
+  
+  **Validation**: Sum of all batch quantities must equal total `amount`
+</ParamField>
+
+<ParamField path="fecha_vencimiento" type="date" required>
+  Expiration date or maximum consumption date
+  
+  **Note**: For perishables without printed dates, enter estimated maximum shelf life
+</ParamField>
+
+#### Multiple Batches
+
+<Tip>
+  Use multiple batches only when the same product arrives with **different expiration dates**. Otherwise, register as a single batch.
+</Tip>
+
+**Example scenario**: 100 kg of rice arrives:
+- 60 kg expires on 2026-12-31
+- 40 kg expires on 2027-03-15
+
+→ Register as 2 batches
+
+### Batch Validation
+
+The form validates batch data before submission:
+
+```javascript
+// Sum of batch quantities must match total amount
+const sumaLotes = detalle.lotes.reduce((sum, lote) => 
+  sum + parseFloat(lote.cantidad || 0), 0)
+const cantidadTotal = parseFloat(detalle.amount || 0)
+
+if (Math.abs(sumaLotes - cantidadTotal) > 0.01) {
+  // Validation error: quantities don't match
+}
+```
+
+**Visual feedback**: The form shows a live summary:
+
+```
+Resumen: Suma: 100.00 | Total: 100.00 ✓
+```
+
+If they don't match:
+
+```
+Resumen: Suma: 95.00 | Total: 100.00 ⚠ No coinciden
+```
+
+## Submitting the Guide
+
+When the form is submitted (`src/pages/GuiasEntrada.jsx:150-238`):
+
+1. **Validate**: Check batch quantities and required fields
+2. **Create guide record**:
+   ```javascript
+   {
+     numero_guia_sunagro: string,
+     numero_guia_sisecal: string | null,
+     fecha: date,
+     vocera_nombre: string,
+     telefono_vocera: string | null,
+     notas: string | null,
+     created_by: user.id,
+     estado: 'Pendiente'
+   }
+   ```
+3. **Insert input details** with JSONB batch data:
+   ```javascript
+   {
+     id_guia: number,
+     id_product: number,
+     amount: number,
+     unit_amount: number | null,
+     fecha: date,
+     lotes_detalle: [
+       { cantidad: number, fecha_vencimiento: date },
+       ...
+     ]
+   }
+   ```
+
+### Success Notification
+
+```
+Guía registrada
+Guía #91 registrada. Estado: Pendiente de aprobación. 
+El inventario se actualizará cuando el Director la apruebe.
+```
+
+### Duplicate Guide Error
+
+If `numero_guia_sunagro` already exists:
+
+```
+Guía duplicada
+Ya existe una guía con el número SUNAGRO "91"
+```
+
+## Viewing Entry Guides
+
+### Filter Options
+
+The history view includes filters:
+
+<CardGroup cols={3}>
+  <Card title="Nº Guía SUNAGRO" icon="magnifying-glass">
+    Search by guide number (partial match supported)
+  </Card>
+  <Card title="Desde" icon="calendar-days">
+    Start date filter (default: 30 days ago)
+  </Card>
+  <Card title="Hasta" icon="calendar-days">
+    End date filter (default: today)
+  </Card>
+</CardGroup>
+
+### Guide Status Badges
+
+<CardGroup cols={3}>
+  <Card title="Pendiente" icon="clock" color="#fbbf24">
+    **Yellow/Amber**: Awaiting Director approval
+  </Card>
+  <Card title="Aprobada" icon="circle-check" color="#10b981">
+    **Green**: Approved - inventory updated
+  </Card>
+  <Card title="Rechazada" icon="circle-xmark" color="#ef4444">
+    **Red**: Rejected - no inventory change
+  </Card>
+</CardGroup>
+
+### Guide Card Details
+
+Each guide displays:
+
+- **Header**: Guide number(s), status badge, creation date
+- **Vocera info**: Name and phone of person who received delivery
+- **Product list**: All items with quantities and batch details
+- **Approval metadata** (if approved/rejected):
+  - Approver name
+  - Approval/rejection date
+  - Comments/rejection reason
+
+### Product Line Item Format
+
+```
+[Product Name]
++100.00 kg (10 bultos)
+📦 2 lote(s) — Vence: 31/12/2026, 15/03/2027
+```
+
+## Data Structure
+
+### guia_entrada Table
+
+```sql
+CREATE TABLE guia_entrada (
+  id_guia SERIAL PRIMARY KEY,
+  numero_guia_sunagro TEXT NOT NULL UNIQUE,
+  numero_guia_sisecal TEXT,
+  fecha DATE,
+  vocera_nombre TEXT,
+  telefono_vocera TEXT,
+  notas TEXT,
+  estado TEXT DEFAULT 'Pendiente',  -- 'Pendiente' | 'Aprobada' | 'Rechazada'
+  aprobado_por UUID REFERENCES users(id_user),
+  fecha_aprobacion TIMESTAMPTZ,
+  comentarios_aprobacion TEXT,
+  created_by UUID REFERENCES users(id_user),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### input Table (Details)
+
+```sql
+CREATE TABLE input (
+  id_input SERIAL PRIMARY KEY,
+  id_guia INTEGER REFERENCES guia_entrada(id_guia) ON DELETE CASCADE,
+  id_product INTEGER REFERENCES product(id_product),
+  amount NUMERIC(10,2) NOT NULL,
+  unit_amount INTEGER,
+  lotes_detalle JSONB,  -- Array of {cantidad, fecha_vencimiento}
+  fecha DATE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### JSONB Batch Format
+
+```json
+[
+  {
+    "cantidad": 60.0,
+    "fecha_vencimiento": "2026-12-31"
+  },
+  {
+    "cantidad": 40.0,
+    "fecha_vencimiento": "2027-03-15"
+  }
+]
+```
+
+<Info>
+  **GIN Index**: The `lotes_detalle` field has a GIN index (`idx_input_lotes_detalle`) for efficient JSONB queries when implementing FIFO consumption.
+</Info>
+
+## Role-Based Permissions
+
+| Role | Create Guides | View Guides | Approve/Reject |
+|------|---------------|-------------|----------------|
+| **Director** (id_rol=1) | ✅ | ✅ | ✅ |
+| **Madre Procesadora** (id_rol=2) | ✅ | ✅ | ❌ |
+| **Supervisor** (id_rol=3) | ❌ | ✅ | ❌ |
+| **Desarrollador** (id_rol=4) | ✅ | ✅ | ✅ |
+
+## Next Step: Approval
+
+After creating a guide, the Director must approve it before inventory updates. See [Entry Guides - Approval Workflow](/features/entry-guides#approval-workflow-system) above or the [Entry Approval Workflow Guide](/guides/entry-approval-workflow) for detailed instructions.
+
+## Technical Details
+
+<Info>
+  **File location**: `src/pages/GuiasEntrada.jsx:1-937`
+</Info>
+
+### Key Functions
+
+- **loadGuias()**: Fetches guides with filters, joins product/user data
+- **loadProducts()**: Gets product catalog for dropdown
+- **handleSubmit()**: Validates and creates guide + input details
+- **addDetalle()**: Adds new product row to form
+- **addLote()**: Adds batch to a product
+- **handleLoteChange()**: Updates batch quantity/date with live validation

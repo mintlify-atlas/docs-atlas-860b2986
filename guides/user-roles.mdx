@@ -1,0 +1,203 @@
+---
+title: 'User Roles and Permissions'
+description: 'Understanding the four user roles in PAE Inventory System'
+icon: 'users'
+---
+
+## Overview
+
+The PAE Inventory System implements a hierarchical role-based access control system with four distinct user roles. Each role has specific permissions designed to maintain data integrity and enforce the maker-checker approval workflow.
+
+## User Roles
+
+### 1. Director (Role ID: 1)
+
+**Authority Level:** Highest operational authority
+
+**Key Permissions:**
+- Approve or reject entry guides (guías de entrada)
+- Create and manage products/inventory items
+- Create and manage users (except other Directors and Developers)
+- Register daily operations
+- Configure portion yields
+- Full read access to all data and audit logs
+
+**Restrictions:**
+- Cannot modify or delete other Director accounts
+- Cannot assign the Director role (only Developers can)
+- Cannot modify their own account from user management interface
+
+**Use Case:** School principal or administrative head responsible for final approval of inventory transactions.
+
+### 2. Madre Procesadora (Role ID: 2)
+
+**Authority Level:** Operational manager
+
+**Key Permissions:**
+- Create entry guides (guías de entrada) - guides remain "Pendiente" until Director approves
+- Create and update products/inventory items
+- Register daily operations and attendance
+- Configure portion yields
+- Full read access to all data
+
+**Restrictions:**
+- Cannot approve or reject entry guides
+- Cannot manage users
+- Cannot delete products (only Director can)
+
+**Use Case:** Kitchen manager or food processor who handles day-to-day inventory operations and creates entry records.
+
+### 3. Supervisor (Role ID: 3)
+
+**Authority Level:** Read-only
+
+**Key Permissions:**
+- View all products, inventory, and reports
+- View entry guides and their approval status
+- View daily operations and attendance records
+- View audit logs
+
+**Restrictions:**
+- Cannot create, update, or delete any data
+- Cannot approve entry guides
+- Cannot manage users
+- All action buttons are hidden from the UI
+
+**Use Case:** Oversight personnel who need to monitor operations without modifying data.
+
+### 4. Desarrollador (Role ID: 4)
+
+**Authority Level:** Technical administrator (highest system-level authority)
+
+**Key Permissions:**
+- All permissions of Director role
+- Can create Director accounts
+- Can modify any user except themselves (from UI)
+- Full database access for system maintenance
+
+**Restrictions:**
+- Can only be assigned directly from the database
+- Cannot be assigned through the application UI
+- Cannot modify their own account from user management
+
+**Use Case:** System developer or technical administrator responsible for system configuration and maintenance.
+
+<Note>
+The Desarrollador role is protected at the database level and cannot be assigned through the application interface. Only database administrators can assign this role.
+</Note>
+
+## Role Hierarchy
+
+```
+Desarrollador (4) - Full system control
+    ↓
+Director (1) - Operational approval authority
+    ↓
+Madre Procesadora (2) - Operational execution
+    ↓
+Supervisor (3) - Read-only monitoring
+```
+
+## Permission Matrix
+
+| Feature | Director | Madre Procesadora | Supervisor | Desarrollador |
+|---------|----------|-------------------|------------|---------------|
+| **Products** |
+| View products | ✓ | ✓ | ✓ | ✓ |
+| Create products | ✓ | ✓ | ✗ | ✓ |
+| Update products | ✓ | ✓ | ✗ | ✓ |
+| Delete products | ✓ | ✗ | ✗ | ✓ |
+| **Entry Guides** |
+| View entry guides | ✓ | ✓ | ✓ | ✓ |
+| Create entry guides | ✓ | ✓ | ✗ | ✓ |
+| Approve/reject guides | ✓ | ✗ | ✗ | ✓ |
+| **Daily Operations** |
+| View operations | ✓ | ✓ | ✓ | ✓ |
+| Register operations | ✓ | ✓ | ✗ | ✓ |
+| **Portion Management** |
+| View portions | ✓ | ✓ | ✓ | ✓ |
+| Configure portions | ✓ | ✓ | ✗ | ✓ |
+| **User Management** |
+| View users | ✓ | ✓ | ✓ | ✓ |
+| Create users | ✓ | ✗ | ✗ | ✓ |
+| Update users | ✓ | ✗ | ✗ | ✓ |
+| Create Directors | ✗ | ✗ | ✗ | ✓ |
+| **Audit Logs** |
+| View audit logs | ✓ | ✓ | ✓ | ✓ |
+
+## Database-Level Protection
+
+The system enforces role permissions through PostgreSQL triggers and Row Level Security (RLS) policies:
+
+### Trigger Protection (from supabase_schema.sql:213-291)
+
+```sql
+CREATE OR REPLACE FUNCTION protect_director_users()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_actor_role INTEGER;
+BEGIN
+  -- Get the current user's role
+  SELECT id_rol INTO v_actor_role FROM users WHERE id_user = auth.uid();
+
+  -- Users cannot modify themselves from user management
+  IF OLD.id_user = auth.uid() THEN
+    RAISE EXCEPTION 'No puede modificar su propia cuenta desde la gestion de usuarios.';
+  END IF;
+
+  -- Nobody can modify a Desarrollador account
+  IF OLD.id_rol = 4 THEN
+    RAISE EXCEPTION 'No puede modificar la cuenta de un Desarrollador.';
+  END IF;
+
+  -- Directors cannot modify other Directors
+  IF v_actor_role = 1 AND OLD.id_rol = 1 THEN
+    RAISE EXCEPTION 'Un Director no puede modificar a otro Director.';
+  END IF;
+
+  -- Only Developers can promote to Director
+  IF NEW.id_rol = 1 AND OLD.id_rol != 1 AND v_actor_role != 4 THEN
+    RAISE EXCEPTION 'Solo el Desarrollador puede asignar el rol de Director.';
+  END IF;
+
+  -- Desarrollador role can only be assigned from database
+  IF NEW.id_rol = 4 AND OLD.id_rol != 4 THEN
+    RAISE EXCEPTION 'El rol de Desarrollador solo se asigna desde la base de datos.';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+### RLS Policies (from supabase_schema.sql:738-743)
+
+```sql
+CREATE POLICY "Users: Todos pueden ver" ON users FOR SELECT USING (true);
+CREATE POLICY "Users: Director puede insertar" ON users FOR INSERT
+    WITH CHECK (get_user_role() IN (1, 4));
+CREATE POLICY "Users: Director puede actualizar" ON users FOR UPDATE
+    USING (get_user_role() IN (1, 2, 3, 4));
+```
+
+## How to Check Your Role
+
+Your current role is displayed in:
+1. **Profile menu** - Click your username in the top-right corner
+2. **Dashboard** - Shows your role name and permissions
+3. **Navigation menu** - Only shows features you have access to
+
+<Tip>
+If you need different permissions, contact your system administrator or a user with Director/Desarrollador role to update your account.
+</Tip>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Entry Approval Workflow" icon="check-circle" href="/guides/entry-approval-workflow">
+    Learn about the maker-checker approval process
+  </Card>
+  <Card title="Managing Products" icon="box" href="/guides/managing-products">
+    How to create and manage inventory items
+  </Card>
+</CardGroup>

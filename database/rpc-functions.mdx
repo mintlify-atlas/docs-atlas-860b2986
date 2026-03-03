@@ -1,0 +1,329 @@
+---
+title: 'RPC Functions'
+description: 'Remote Procedure Call functions for PAE Inventory System'
+icon: 'function'
+---
+
+## Overview
+
+The PAE Inventory System uses PostgreSQL stored procedures exposed as RPC functions through Supabase. These functions handle complex transactional operations with built-in permission checks and audit logging.
+
+## aprobar_guia
+
+Approves a pending entry guide (guía de entrada) and updates inventory stock atomically.
+
+### Signature
+
+```sql
+aprobar_guia(
+  p_id_guia INTEGER,
+  p_comentarios TEXT DEFAULT NULL
+) RETURNS JSON
+```
+
+### Parameters
+
+<ParamField path="p_id_guia" type="INTEGER" required>
+  The ID of the guide to approve
+</ParamField>
+
+<ParamField path="p_comentarios" type="TEXT" default="NULL">
+  Optional comments about the approval
+</ParamField>
+
+### Return Type
+
+Returns a JSON object with the following structure:
+
+```json
+{
+  "success": true,
+  "id_guia": 123,
+  "productos_procesados": 5,
+  "mensaje": "Guia G-2026-001 aprobada. 5 productos actualizados."
+}
+```
+
+### Behavior
+
+1. **Permission Check**: Only users with role Director (1) or Desarrollador (4) can approve guides
+2. **Validation**: Verifies the guide exists and is in 'Pendiente' (Pending) state
+3. **Transaction**: Updates guide status to 'Aprobada' and increments stock for all associated products
+4. **Audit**: Creates an audit log entry with approval details
+
+### Error Conditions
+
+<ResponseField name="No tiene permisos para aprobar guias" type="EXCEPTION">
+  Raised when user doesn't have Director or Desarrollador role
+</ResponseField>
+
+<ResponseField name="Guia con ID % no encontrada" type="EXCEPTION">
+  Raised when the specified guide ID doesn't exist
+</ResponseField>
+
+<ResponseField name="La guia ya fue procesada" type="EXCEPTION">
+  Raised when the guide is not in 'Pendiente' state
+</ResponseField>
+
+### Usage Example
+
+```typescript
+const { data, error } = await supabase.rpc('aprobar_guia', {
+  p_id_guia: 123,
+  p_comentarios: 'Verificado - todos los productos en buen estado'
+});
+```
+
+---
+
+## rechazar_guia
+
+Rejects a pending entry guide without updating inventory.
+
+### Signature
+
+```sql
+rechazar_guia(
+  p_id_guia INTEGER,
+  p_motivo TEXT
+) RETURNS JSON
+```
+
+### Parameters
+
+<ParamField path="p_id_guia" type="INTEGER" required>
+  The ID of the guide to reject
+</ParamField>
+
+<ParamField path="p_motivo" type="TEXT" required>
+  Required reason for rejection
+</ParamField>
+
+### Return Type
+
+Returns a JSON object:
+
+```json
+{
+  "success": true,
+  "id_guia": 123,
+  "mensaje": "Guia G-2026-001 rechazada."
+}
+```
+
+### Behavior
+
+1. **Permission Check**: Only Director (1) or Desarrollador (4) can reject guides
+2. **Validation**: Requires non-empty rejection reason, verifies guide is pending
+3. **Update**: Sets guide status to 'Rechazada' with rejection reason
+4. **Audit**: Logs rejection with motivo in audit_log
+
+### Error Conditions
+
+<ResponseField name="No tiene permisos para rechazar guias" type="EXCEPTION">
+  Raised when user lacks required permissions
+</ResponseField>
+
+<ResponseField name="Debe proporcionar un motivo" type="EXCEPTION">
+  Raised when p_motivo is NULL or empty
+</ResponseField>
+
+<ResponseField name="La guia ya fue procesada" type="EXCEPTION">
+  Raised when guide state is not 'Pendiente'
+</ResponseField>
+
+### Usage Example
+
+```typescript
+const { data, error } = await supabase.rpc('rechazar_guia', {
+  p_id_guia: 123,
+  p_motivo: 'Números de guía no coinciden con documentación física'
+});
+```
+
+---
+
+## get_lotes_por_vencer
+
+Retrieves batches (lotes) that are expiring within a specified number of days.
+
+### Signature
+
+```sql
+get_lotes_por_vencer(
+  p_dias INTEGER DEFAULT 30
+) RETURNS TABLE(...)
+```
+
+### Parameters
+
+<ParamField path="p_dias" type="INTEGER" default="30">
+  Number of days to look ahead for expiring batches
+</ParamField>
+
+### Return Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id_product` | INTEGER | Product ID |
+| `product_name` | TEXT | Product name |
+| `stock` | NUMERIC(10,2) | Current total stock |
+| `unit_measure` | TEXT | Unit of measure (kg, lt, unidades) |
+| `category_name` | TEXT | Product category |
+| `fecha_vencimiento` | DATE | Batch expiration date |
+| `cantidad_lote` | NUMERIC(10,2) | Quantity in this batch |
+| `dias_restantes` | INTEGER | Days until expiration |
+
+### Behavior
+
+1. Queries JSONB `lotes_detalle` from approved guides
+2. Filters batches expiring within `p_dias` days
+3. Orders by expiration date (FIFO - First In, First Out)
+4. Only includes batches from approved guides
+
+### Usage Example
+
+```typescript
+// Get batches expiring in next 7 days
+const { data, error } = await supabase.rpc('get_lotes_por_vencer', {
+  p_dias: 7
+});
+
+// data will be an array of rows matching the return table structure
+```
+
+---
+
+## procesar_operacion_diaria
+
+Processes a daily operation (meal service) with FIFO batch consumption and automatic stock updates.
+
+### Signature
+
+```sql
+procesar_operacion_diaria(
+  p_fecha DATE,
+  p_turno TEXT,
+  p_asistencia INTEGER,
+  p_rubros INTEGER[]
+) RETURNS JSON
+```
+
+### Parameters
+
+<ParamField path="p_fecha" type="DATE" required>
+  Date of the operation
+</ParamField>
+
+<ParamField path="p_turno" type="TEXT" required>
+  Meal shift: 'Desayuno', 'Almuerzo', or 'Merienda'
+</ParamField>
+
+<ParamField path="p_asistencia" type="INTEGER" required>
+  Total student attendance for this meal
+</ParamField>
+
+<ParamField path="p_rubros" type="INTEGER[]" required>
+  Array of product IDs (rubros) used in this meal
+</ParamField>
+
+### Return Type
+
+Returns a JSON object:
+
+```json
+{
+  "success": true,
+  "id_registro": 45,
+  "rubros_procesados": 3,
+  "mensaje": "Operacion registrada: 3 rubros procesados para 150 alumnos."
+}
+```
+
+### Behavior
+
+This is the most complex RPC function, implementing full FIFO (First-Expire, First-Out) logic:
+
+1. **Permission Check**: Requires Director (1), Madre Procesadora (2), or Desarrollador (4) role
+2. **Create Record**: Inserts into `registro_diario` table
+3. **For each rubro**:
+   - Retrieves `rendimiento_por_unidad` (yield/portion) from `receta_porcion`
+   - Calculates required quantity: `asistencia / rendimiento`
+   - Locks relevant batch rows using `SELECT FOR UPDATE`
+   - Consumes batches in FIFO order (earliest expiration first)
+   - Updates JSONB batch quantities
+   - Creates output record (triggers automatic stock deduction)
+4. **Audit**: Logs operation details to `audit_log`
+
+### FIFO Implementation
+
+Batches are consumed in order of:
+1. Expiration date (ascending)
+2. Input ID (ascending, for same-date batches)
+
+The function:
+- Locks all relevant batches to prevent race conditions
+- Consumes partial batches when necessary
+- Updates JSONB quantities atomically
+- Validates sufficient stock before committing
+
+### Error Conditions
+
+<ResponseField name="No tiene permisos para registrar operaciones diarias" type="EXCEPTION">
+  User lacks required role (must be 1, 2, or 4)
+</ResponseField>
+
+<ResponseField name="El rubro no tiene rendimiento configurado" type="EXCEPTION">
+  A product in p_rubros lacks a receta_porcion entry or has invalid yield
+</ResponseField>
+
+<ResponseField name="Lotes insuficientes" type="EXCEPTION">
+  Not enough batch quantities available to fulfill the operation
+  
+  Format: `Lotes insuficientes para "[Product]". Faltan X unidades.`
+</ResponseField>
+
+<ResponseField name="Stock insuficiente" type="EXCEPTION">
+  Raised by trigger_update_stock_output if overall stock is insufficient
+</ResponseField>
+
+### Usage Example
+
+```typescript
+const { data, error } = await supabase.rpc('procesar_operacion_diaria', {
+  p_fecha: '2026-03-03',
+  p_turno: 'Almuerzo',
+  p_asistencia: 150,
+  p_rubros: [1, 4, 5, 6]  // Arroz, Pollo, Caraotas, Pasta
+});
+
+if (error) {
+  // Handle errors - likely insufficient stock or missing yield config
+  console.error(error.message);
+}
+```
+
+## Permissions
+
+All RPC functions are granted to the `authenticated` role:
+
+```sql
+GRANT EXECUTE ON FUNCTION aprobar_guia(INTEGER, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION rechazar_guia(INTEGER, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_lotes_por_vencer(INTEGER) TO authenticated;
+GRANT EXECUTE ON FUNCTION procesar_operacion_diaria(DATE, TEXT, INTEGER, INTEGER[]) TO authenticated;
+```
+
+However, each function implements internal role-based access control checking `get_user_role()` against the `users` table.
+
+## Security
+
+All functions are defined with `SECURITY DEFINER`, meaning they execute with the privileges of the function creator rather than the caller. This allows:
+
+- Controlled access to sensitive operations
+- Consistent audit logging via `auth.uid()`
+- Enforcement of business rules regardless of RLS policies
+
+<Warning>
+  SECURITY DEFINER functions bypass Row Level Security. All permission checks must be implemented within the function body.
+</Warning>

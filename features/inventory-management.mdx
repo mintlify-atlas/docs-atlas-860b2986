@@ -1,0 +1,244 @@
+---
+title: Inventory Management
+description: Product catalog and stock tracking for school food program items
+icon: 'boxes-stacked'
+---
+
+The Inventory Management module manages your product catalog (rubros) and tracks real-time stock levels. All inventory items are categorized and measured in their respective units.
+
+## Product List View
+
+The main inventory page displays all registered products in a sortable table:
+
+### Table Columns
+
+| Column | Description | Data Source |
+|--------|-------------|-------------|
+| **Nº Ítem** | Product ID number | `product.id_product` |
+| **Nombre** | Product name | `product.product_name` |
+| **Categoría** | Product category | `category.category_name` (joined) |
+| **Stock** | Current quantity with status badge | `product.stock` |
+| **Unidad** | Unit of measure | `product.unit_measure` |
+| **Acciones** | Edit/Delete buttons | - |
+
+### Stock Status Badges
+
+Stock levels are color-coded for quick visual assessment:
+
+<CardGroup cols={3}>
+  <Card title="BAJO" icon="triangle-exclamation" color="#ef4444">
+    **Red badge**: Stock < 10 units - Immediate reorder needed
+  </Card>
+  <Card title="MEDIO" icon="gauge-simple-med" color="#f59e0b">
+    **Amber badge**: Stock between 10-49 units - Monitor closely
+  </Card>
+  <Card title="OK" icon="circle-check" color="#10b981">
+    **Green badge**: Stock ≥ 50 units - Adequate supply
+  </Card>
+</CardGroup>
+
+## Creating Products
+
+<Info>
+  **Permission required**: Director or Madre Procesadora roles only
+</Info>
+
+### Product Form Fields
+
+#### Required Fields
+
+<ParamField path="product_name" type="string" required>
+  Product name (e.g., "Arroz", "Aceite de girasol")
+</ParamField>
+
+<ParamField path="unit_measure" type="select" required>
+  Unit of measurement:
+  - `kg` - Kilogramos
+  - `lt` - Litros  
+  - `unidades` - Units
+</ParamField>
+
+#### Optional Fields
+
+<ParamField path="id_category" type="select">
+  Category selection from predefined list:
+  - Lacteos (Dairy)
+  - Proteinas (Proteins)
+  - Carbohidratos (Carbohydrates)
+  - Legumbres (Legumes)
+  - Vegetales (Vegetables)
+  - Frutas (Fruits)
+  - Aceites y grasas (Oils and fats)
+  - Condimentos (Condiments)
+  - Otros (Other)
+</ParamField>
+
+<ParamField path="description" type="textarea">
+  Additional product details or notes
+</ParamField>
+
+### Database Fields
+
+When submitted, the form creates/updates records with:
+
+```json
+{
+  "product_name": "string",
+  "unit_measure": "kg | lt | unidades",
+  "description": "string | null",
+  "id_category": "integer | null",
+  "stock": 0,  // Auto-initialized
+  "created_at": "timestamp",
+  "updated_at": "timestamp"
+}
+```
+
+<Warning>
+  **Stock initialization**: New products start with `stock = 0`. Stock is updated through approved entry guides, not manually.
+</Warning>
+
+## Editing Products
+
+Click the **Editar** button to modify product details:
+
+- Product name
+- Unit of measure
+- Category assignment
+- Description
+
+<Note>
+  **Stock cannot be edited directly**. Stock levels update automatically when:
+  - Entry guides are approved (increases stock)
+  - Daily operations are registered (decreases stock via FIFO)
+</Note>
+
+## Deleting Products
+
+<Warning>
+  **Permission required**: Director role only
+</Warning>
+
+Attempting to delete a product will:
+
+1. Show a confirmation dialog: "¿Eliminar rubro? Esta acción no se puede deshacer"
+2. Check for foreign key constraints
+3. Block deletion if the product is referenced in:
+   - `receta_porcion` (portion recipes)
+   - `input` (entry guide details)
+   - `output` (daily operation outputs)
+
+### Error Message
+
+If deletion is blocked:
+
+```
+No se puede eliminar
+Este rubro ya está siendo usado en Porciones, Entradas o Salidas. 
+Para mantener el historial, no debe borrarse.
+```
+
+**Reason**: The system preserves data integrity and audit trails by preventing deletion of products with transaction history.
+
+## Role-Based Access
+
+### Supervisor Role (id_rol = 3)
+
+Supervisors have **read-only** access:
+- ✅ View product list
+- ✅ See stock levels
+- ❌ Cannot create products
+- ❌ Cannot edit products  
+- ❌ Cannot delete products
+- ❌ Form hidden entirely
+
+### Madre Procesadora (id_rol = 2)
+
+- ✅ View products
+- ✅ Create new products
+- ✅ Edit existing products
+- ❌ Cannot delete products
+
+### Director (id_rol = 1)
+
+- ✅ Full access to all operations
+- ✅ Can delete products (with constraint validation)
+
+## Data Loading
+
+### Initial Load
+
+On page mount (`src/pages/Products.jsx:22-25`):
+
+```javascript
+loadProducts()  // Fetch all products with categories
+loadCategories()  // Fetch category options for dropdown
+loadUserRole()  // Determine current user permissions
+```
+
+### Product Query
+
+```sql
+SELECT product.*, category.category_name
+FROM product
+LEFT JOIN category ON product.id_category = category.id_category
+ORDER BY product_name
+```
+
+### Loading State
+
+Displays global loader while fetching:
+
+```jsx
+<GlobalLoader text="Cargando inventario..." />
+```
+
+## Empty State
+
+When no products exist:
+
+```jsx
+<div className="empty-state">
+  <p>No hay rubros registrados</p>
+  <button onClick={() => setShowForm(true)}>
+    Crear primer rubro
+  </button>
+</div>
+```
+
+## Technical Implementation
+
+<Info>
+  **File location**: `src/pages/Products.jsx:1-311`
+</Info>
+
+### Form Validation
+
+- **Required fields**: Product name, unit of measure
+- **Optional fields**: Category, description
+- **Client-side**: HTML5 `required` attribute
+- **Server-side**: Database NOT NULL constraints
+
+### Stock Management
+
+<Warning>
+  Stock is **never** modified directly through this interface. It updates automatically via:
+  - **Approved entry guides** → Increases stock (see [Entry Guides](/features/entry-guides))
+  - **Daily operations** → Decreases stock using FIFO (see [Daily Operations](/features/daily-operations))
+</Warning>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Catalog Setup" icon="list-check">
+    Initial configuration of all food items the school program uses
+  </Card>
+  <Card title="Stock Monitoring" icon="chart-line">
+    Real-time visibility into inventory levels for reorder planning
+  </Card>
+  <Card title="Category Organization" icon="layer-group">
+    Group products by type for easier reporting and management
+  </Card>
+  <Card title="Unit Standardization" icon="ruler">
+    Ensure consistent measurement units across all operations
+  </Card>
+</CardGroup>

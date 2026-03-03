@@ -1,0 +1,369 @@
+---
+title: User Management
+description: Director-only user account management with role-based access control
+icon: users
+---
+
+<Warning>
+  **Director Access Only**: User management is restricted to users with the **Director** role (id_rol=1) or **Desarrollador** role (id_rol=4). Other roles will see an "Access Denied" message.
+</Warning>
+
+## Overview
+
+The User Management module (`Usuarios.jsx`) provides complete user lifecycle management including creating accounts, editing user details, changing passwords, and activating/deactivating users. The system implements a hierarchical protection model that prevents unauthorized modifications.
+
+## Role Hierarchy
+
+The system enforces a strict role hierarchy:
+
+1. **Desarrollador** (id_rol=4) - Full system access, can modify all accounts
+2. **Director** (id_rol=1) - Can manage Madre Procesadora and Supervisor accounts
+3. **Madre Procesadora** (id_rol=2) - Standard operational access
+4. **Supervisor** (id_rol=3) - Read-only access
+
+## Access Control
+
+Access verification happens on component mount:
+
+```jsx
+const checkPermissions = async () => {
+  const data = await getUserData()
+  setUserRole(data?.id_rol)
+  setCurrentUserId(data?.id_user)
+}
+```
+
+Users without Director or Desarrollador roles see:
+
+```jsx
+if (userRole !== null && userRole !== 1 && userRole !== 4) {
+  return (
+    <div style={{ padding: '2rem' }}>
+      <div style={{
+        padding: '3rem',
+        textAlign: 'center',
+        background: '#fee2e2',
+        borderRadius: '12px',
+        border: '2px solid #ef4444'
+      }}>
+        <div style={{ margin: '0 0 1rem 0' }}><Lock className="w-12 h-12 text-red-400 mx-auto" /></div>
+        <h3>Acceso Denegado</h3>
+        <p>Solo el Director puede gestionar usuarios.</p>
+      </div>
+    </div>
+  )
+}
+```
+
+## User Creation
+
+Directors can create new users with the following restrictions:
+
+### Role Assignment Rules
+
+- **Director cannot create other Directors** - Only Desarrollador can assign Director role
+- **Nobody can create Desarrollador accounts** - This role is assigned directly in the database
+- Director can only create Madre Procesadora (2) and Supervisor (3) roles
+
+```jsx
+{roles.filter(rol => {
+  // Never show Desarrollador
+  if (rol.id_rol === 4) return false
+  // Director only sees roles 2 and 3
+  if (userRole === 1 && rol.id_rol === 1) return false
+  return true
+}).map(rol => (
+  <option key={rol.id_rol} value={rol.id_rol}>
+    {rol.rol_name}
+  </option>
+))}
+```
+
+### Account Creation Function
+
+User accounts are created using the `createUserAccount` function from `supabaseClient.js`:
+
+```javascript
+export const createUserAccount = async (email, password, fullName, username, idRol) => {
+  // 1. Create user in auth.users with separate client
+  const { data: authData, error: authError } = await supabaseAdmin.auth.signUp({
+    email,
+    password,
+  })
+
+  if (authError) throw authError
+  if (!authData.user) throw new Error('No se pudo crear el usuario en autenticación')
+
+  // 2. Insert into users table with main client (has RLS permissions)
+  const { error: insertError } = await supabase
+    .from('users')
+    .insert({
+      id_user: authData.user.id,
+      username,
+      full_name: fullName,
+      id_rol: idRol,
+    })
+
+  if (insertError) {
+    throw new Error('Usuario creado en autenticación pero falló al registrar en el sistema: ' + insertError.message)
+  }
+
+  return authData.user
+}
+```
+
+### Password Requirements
+
+```jsx
+if (formData.password.length < 6) {
+  throw new Error('La contraseña debe tener al menos 6 caracteres')
+}
+```
+
+<Note>
+  Passwords are displayed in **plain text** during creation so the Director can share credentials with the new user. After creation, a notification displays the credentials.
+</Note>
+
+## Editing Users
+
+### Edit Restrictions
+
+```jsx
+const handleEdit = (user) => {
+  if (user.id_user === currentUserId) {
+    notifyWarning('Acción no permitida', 'No puede editar su propia cuenta desde aquí')
+    return
+  }
+  // Nobody can edit a Desarrollador
+  if (user.id_rol === 4) {
+    notifyWarning('Acción no permitida', 'No puede modificar la cuenta de un Desarrollador')
+    return
+  }
+  // Director cannot edit another Director
+  if (userRole === 1 && user.id_rol === 1) {
+    notifyWarning('Acción no permitida', 'No puede modificar a otro Director')
+    return
+  }
+  // Proceed with edit...
+}
+```
+
+### What Can Be Edited
+
+- **Full Name** - Can be changed
+- **Username** - Cannot be changed (disabled in edit mode)
+- **Role** - Can be changed within allowed roles
+- **Email** - Cannot be changed (not shown in edit form)
+
+```jsx
+<input
+  type="text"
+  name="username"
+  value={formData.username}
+  onChange={handleInputChange}
+  placeholder="nombre.usuario"
+  required
+  disabled={!!editingUser}
+/>
+{editingUser && (
+  <p className="text-sm text-secondary mt-1">
+    El nombre de usuario no se puede cambiar
+  </p>
+)}
+```
+
+## Database Protection: `protect_director_users` Function
+
+The database enforces the role hierarchy through a trigger function:
+
+```sql
+CREATE OR REPLACE FUNCTION protect_director_users()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_actor_role INTEGER;
+BEGIN
+  -- Allow updates that ONLY touch activity columns (heartbeat)
+  IF OLD.username    IS NOT DISTINCT FROM NEW.username
+     AND OLD.full_name  IS NOT DISTINCT FROM NEW.full_name
+     AND OLD.id_rol     IS NOT DISTINCT FROM NEW.id_rol
+     AND OLD.is_active  IS NOT DISTINCT FROM NEW.is_active
+  THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT id_rol INTO v_actor_role FROM users WHERE id_user = auth.uid();
+
+  -- Nobody can modify themselves from user management
+  IF OLD.id_user = auth.uid() THEN
+    RAISE EXCEPTION 'No puede modificar su propia cuenta desde la gestion de usuarios.';
+  END IF;
+
+  -- Nobody can modify a Desarrollador (only from DB directly)
+  IF OLD.id_rol = 4 THEN
+    RAISE EXCEPTION 'No puede modificar la cuenta de un Desarrollador.';
+  END IF;
+
+  -- A Director cannot modify another Director
+  IF v_actor_role = 1 AND OLD.id_rol = 1 THEN
+    RAISE EXCEPTION 'Un Director no puede modificar a otro Director.';
+  END IF;
+
+  -- Nobody can promote to Director except Desarrollador
+  IF NEW.id_rol = 1 AND OLD.id_rol != 1 AND v_actor_role != 4 THEN
+    RAISE EXCEPTION 'Solo el Desarrollador puede asignar el rol de Director.';
+  END IF;
+
+  -- Nobody can assign Desarrollador role
+  IF NEW.id_rol = 4 AND OLD.id_rol != 4 THEN
+    RAISE EXCEPTION 'El rol de Desarrollador solo se asigna desde la base de datos.';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+<Warning>
+  The `protect_director_users` function runs **BEFORE UPDATE** and will throw exceptions if any protection rule is violated. These are enforced at the database level and cannot be bypassed from the application.
+</Warning>
+
+## Password Management
+
+### Password Change Permissions
+
+```jsx
+const canChangePassword = (user) => {
+  // Desarrollador (4): can change all passwords
+  if (userRole === 4) return true
+  // Director (1): can change their own, roles 2 and 3. NOT another Director or Desarrollador
+  if (userRole === 1) {
+    if (user.id_user === currentUserId) return true
+    if ([2, 3].includes(user.id_rol)) return true
+  }
+  return false
+}
+```
+
+### Change Password Function
+
+The `changeUserPassword` function from `supabaseClient.js` handles password updates:
+
+```javascript
+export const changeUserPassword = async (userId, newPassword) => {
+  const currentUser = await getCurrentUser()
+
+  if (currentUser && currentUser.id === userId) {
+    // Changing own password
+    const { data, error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) throw error
+    return data
+  }
+
+  // Changing another user's password (requires service_role key)
+  const { data, error } = await supabaseAdmin.auth.admin.updateUserById(
+    userId,
+    { password: newPassword }
+  )
+  if (error) throw error
+  return data
+}
+```
+
+<Note>
+  Password changes require the **service_role key** when changing another user's password. This key must be configured in `VITE_SUPABASE_SERVICE_ROLE_KEY`.
+</Note>
+
+## Activating/Deactivating Users
+
+### Deactivation Rules
+
+```jsx
+const toggleActive = async (user) => {
+  if (user.id_user === currentUserId) {
+    notifyWarning('Acción no permitida', 'No puede desactivar su propia cuenta')
+    return
+  }
+  // Nobody can deactivate a Desarrollador
+  if (user.id_rol === 4) {
+    notifyWarning('Acción no permitida', 'No puede desactivar la cuenta de un Desarrollador')
+    return
+  }
+  // Director cannot deactivate another Director
+  if (userRole === 1 && user.id_rol === 1) {
+    notifyWarning('Acción no permitida', 'No puede desactivar a otro Director')
+    return
+  }
+  // Proceed with toggle...
+}
+```
+
+### Status Update
+
+```jsx
+const { error } = await supabase
+  .from('users')
+  .update({ is_active: newStatus })
+  .eq('id_user', user.id_user)
+```
+
+<Warning>
+  Inactive users (`is_active: false`) cannot log in to the system. Their rows appear with 50% opacity in the user table.
+</Warning>
+
+## User Activity Tracking
+
+The system tracks user connection status in real-time:
+
+### Online Status Detection
+
+```jsx
+const isUserOnline = (lastSeen) => {
+  if (!lastSeen) return false
+  return (new Date() - new Date(lastSeen)) < 3 * 60 * 1000 // 3 minutes
+}
+```
+
+### Auto-refresh
+
+```jsx
+useEffect(() => {
+  const interval = setInterval(() => {
+    loadUsuarios()
+  }, 60 * 1000) // Refresh every 60 seconds
+  return () => clearInterval(interval)
+}, [])
+```
+
+## User Table Columns
+
+The user table displays:
+
+- **Nombre** - Full name
+- **Usuario** - Username
+- **Rol** - Role badge (color-coded)
+- **Estado** - Active/Inactive status
+- **Conexión** - Online indicator or last seen timestamp
+- **Última IP** - Last IP address used
+- **Creado** - Account creation date
+- **Acciones** - Edit, Change Password, Activate/Deactivate buttons
+
+## Permission Summary
+
+| Action | Desarrollador | Director | Madre Procesadora | Supervisor |
+|--------|--------------|----------|-------------------|------------|
+| Access User Management | ✅ | ✅ | ❌ | ❌ |
+| Create Director | ✅ | ❌ | ❌ | ❌ |
+| Create Madre/Supervisor | ✅ | ✅ | ❌ | ❌ |
+| Edit Director | ✅ | ❌ | ❌ | ❌ |
+| Edit Madre/Supervisor | ✅ | ✅ | ❌ | ❌ |
+| Edit Desarrollador | ❌ | ❌ | ❌ | ❌ |
+| Change Own Password | ✅ | ✅ | ❌ | ❌ |
+| Change Director Password | ✅ | ❌ | ❌ | ❌ |
+| Change Madre/Supervisor Password | ✅ | ✅ | ❌ | ❌ |
+| Deactivate Director | ✅ | ❌ | ❌ | ❌ |
+| Deactivate Madre/Supervisor | ✅ | ✅ | ❌ | ❌ |
+
+## Related Documentation
+
+- [Audit Logs](/admin/audit-logs) - Track all user management actions
+- [User Roles](/guides/user-roles) - Role hierarchy and permissions

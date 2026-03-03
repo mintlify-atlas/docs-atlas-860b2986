@@ -1,0 +1,625 @@
+---
+title: 'Database Tables Reference'
+description: 'Complete reference for all database tables in the PAE Inventory System'
+---
+
+## User Management Tables
+
+### `rol` - User Roles
+
+Defines the role hierarchy for the system.
+
+<ResponseField name="id_rol" type="SERIAL PRIMARY KEY">
+  Unique role identifier
+</ResponseField>
+
+<ResponseField name="rol_name" type="TEXT NOT NULL UNIQUE">
+  Role name (Director, Madre Procesadora, Supervisor, Desarrollador)
+</ResponseField>
+
+<ResponseField name="description" type="TEXT">
+  Role description and permissions summary
+</ResponseField>
+
+**Default Roles:**
+- `id_rol=1`: Director - School system administrator
+- `id_rol=2`: Madre Procesadora - Kitchen and inventory operations
+- `id_rol=3`: Supervisor - Read-only supervision
+- `id_rol=4`: Desarrollador - Technical administrator (assigned from DB only)
+
+---
+
+### `users` - User Accounts
+
+Extends Supabase `auth.users` with application-specific fields.
+
+<ResponseField name="id_user" type="UUID PRIMARY KEY">
+  User ID (references `auth.users.id`)
+  
+  **Foreign Key**: `auth.users(id)` ON DELETE CASCADE
+</ResponseField>
+
+<ResponseField name="username" type="TEXT UNIQUE NOT NULL">
+  Unique username for login
+</ResponseField>
+
+<ResponseField name="full_name" type="TEXT NOT NULL">
+  User's full name
+</ResponseField>
+
+<ResponseField name="id_rol" type="INTEGER">
+  User role (references `rol.id_rol`)
+  
+  **Default**: `2` (Madre Procesadora)
+</ResponseField>
+
+<ResponseField name="is_active" type="BOOLEAN">
+  Account active status
+  
+  **Default**: `TRUE`
+</ResponseField>
+
+<ResponseField name="last_activity" type="TIMESTAMPTZ">
+  Last activity timestamp
+</ResponseField>
+
+<ResponseField name="last_seen" type="TIMESTAMPTZ">
+  Last seen (heartbeat) timestamp
+</ResponseField>
+
+<ResponseField name="last_ip" type="TEXT">
+  Last known IP address
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Account creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Triggers:**
+- `trigger_protect_director` - Prevents unauthorized modifications to Director accounts
+- `trigger_protect_director_insert` - Validates role assignments on creation
+
+---
+
+## Inventory Management Tables
+
+### `category` - Product Categories
+
+<ResponseField name="id_category" type="SERIAL PRIMARY KEY">
+  Unique category identifier
+</ResponseField>
+
+<ResponseField name="category_name" type="TEXT NOT NULL UNIQUE">
+  Category name
+</ResponseField>
+
+<ResponseField name="description" type="TEXT">
+  Category description
+</ResponseField>
+
+**Default Categories:**
+- Lacteos (Dairy)
+- Proteinas (Proteins)
+- Carbohidratos (Carbohydrates)
+- Legumbres (Legumes)
+- Vegetales (Vegetables)
+- Frutas (Fruits)
+- Aceites y grasas (Oils and fats)
+- Condimentos (Condiments)
+- Otros (Others)
+
+---
+
+### `product` - Product Catalog
+
+Master product catalog with current stock levels.
+
+<ResponseField name="id_product" type="SERIAL PRIMARY KEY">
+  Unique product identifier
+</ResponseField>
+
+<ResponseField name="product_name" type="TEXT NOT NULL">
+  Product name
+</ResponseField>
+
+<ResponseField name="stock" type="NUMERIC(10,2)">
+  Current stock quantity
+  
+  **Default**: `0`
+  
+  **Constraint**: `CHECK (stock >= 0)`
+</ResponseField>
+
+<ResponseField name="unit_measure" type="TEXT NOT NULL">
+  Unit of measurement (kg, lt, unidades)
+</ResponseField>
+
+<ResponseField name="description" type="TEXT">
+  Product description or notes
+</ResponseField>
+
+<ResponseField name="id_category" type="INTEGER">
+  Product category (references `category.id_category`)
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Record creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+<ResponseField name="updated_at" type="TIMESTAMPTZ">
+  Last update timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Triggers:**
+- `update_product_updated_at` - Automatically updates `updated_at` on modifications
+- `audit_product` - Logs all INSERT/UPDATE/DELETE operations
+
+---
+
+### `guia_entrada` - Delivery Guides
+
+Delivery guides with maker-checker approval workflow.
+
+<ResponseField name="id_guia" type="SERIAL PRIMARY KEY">
+  Unique guide identifier
+</ResponseField>
+
+<ResponseField name="numero_guia_sunagro" type="TEXT NOT NULL">
+  SUNAGRO guide number (unique)
+  
+  **Constraint**: `UNIQUE`
+</ResponseField>
+
+<ResponseField name="numero_guia_sisecal" type="TEXT">
+  Optional SISECAL guide number
+</ResponseField>
+
+<ResponseField name="fecha" type="DATE">
+  Delivery date
+  
+  **Default**: `CURRENT_DATE`
+</ResponseField>
+
+<ResponseField name="vocera_nombre" type="TEXT">
+  Community representative name
+</ResponseField>
+
+<ResponseField name="telefono_vocera" type="TEXT">
+  Representative phone number
+</ResponseField>
+
+<ResponseField name="notas" type="TEXT">
+  Additional notes
+</ResponseField>
+
+<ResponseField name="estado" type="TEXT">
+  Approval status: Pendiente, Aprobada, Rechazada
+  
+  **Default**: `'Pendiente'`
+  
+  **Constraint**: `CHECK (estado IN ('Pendiente', 'Aprobada', 'Rechazada'))`
+</ResponseField>
+
+<ResponseField name="aprobado_por" type="UUID">
+  User who approved/rejected (references `users.id_user`)
+</ResponseField>
+
+<ResponseField name="fecha_aprobacion" type="TIMESTAMPTZ">
+  Approval/rejection timestamp
+</ResponseField>
+
+<ResponseField name="comentarios_aprobacion" type="TEXT">
+  Approval/rejection comments
+</ResponseField>
+
+<ResponseField name="created_by" type="UUID">
+  User who created the guide (references `users.id_user`)
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Indexes:**
+- `idx_guia_entrada_estado` - Fast filtering by status
+
+**Triggers:**
+- `audit_guia` - Logs all operations
+
+---
+
+### `input` - Delivery Guide Line Items
+
+Individual products within delivery guides, with batch/lot tracking.
+
+<ResponseField name="id_input" type="SERIAL PRIMARY KEY">
+  Unique input identifier
+</ResponseField>
+
+<ResponseField name="id_guia" type="INTEGER">
+  Parent delivery guide (references `guia_entrada.id_guia`)
+  
+  **Foreign Key**: ON DELETE CASCADE
+</ResponseField>
+
+<ResponseField name="id_product" type="INTEGER">
+  Product (references `product.id_product`)
+</ResponseField>
+
+<ResponseField name="amount" type="NUMERIC(10,2)">
+  Quantity received
+  
+  **Constraint**: `CHECK (amount > 0)`
+</ResponseField>
+
+<ResponseField name="unit_amount" type="INTEGER">
+  Quantity in bulk units (if applicable)
+</ResponseField>
+
+<ResponseField name="lotes_detalle" type="JSONB">
+  Batch/lot details with expiration dates
+  
+  **Format**: `[{"cantidad": 50.00, "fecha_vencimiento": "2026-06-30"}]`
+</ResponseField>
+
+<ResponseField name="fecha" type="DATE">
+  Input date
+  
+  **Default**: `CURRENT_DATE`
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Indexes:**
+- `idx_input_lotes_detalle` - GIN index for JSONB queries
+
+---
+
+### `output` - Stock Withdrawals
+
+Records all inventory withdrawals and stock deductions.
+
+<ResponseField name="id_output" type="SERIAL PRIMARY KEY">
+  Unique output identifier
+</ResponseField>
+
+<ResponseField name="id_product" type="INTEGER">
+  Product withdrawn (references `product.id_product`)
+</ResponseField>
+
+<ResponseField name="amount" type="NUMERIC(10,2)">
+  Quantity withdrawn
+  
+  **Constraint**: `CHECK (amount > 0)`
+</ResponseField>
+
+<ResponseField name="fecha" type="DATE">
+  Withdrawal date
+  
+  **Default**: `CURRENT_DATE`
+</ResponseField>
+
+<ResponseField name="motivo" type="TEXT">
+  Reason for withdrawal
+</ResponseField>
+
+<ResponseField name="id_menu" type="INTEGER">
+  Related menu (references `menu_diario.id_menu`) - LEGACY
+</ResponseField>
+
+<ResponseField name="id_registro" type="INTEGER">
+  Related daily record (references `registro_diario.id_registro`)
+</ResponseField>
+
+<ResponseField name="created_by" type="UUID">
+  User who created the withdrawal (references `auth.users.id`)
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Triggers:**
+- `trigger_update_stock_output` - Automatically deducts stock from `product` table
+- `audit_output` - Logs all operations
+
+---
+
+## Daily Operations Tables
+
+### `registro_diario` - Daily Meal Records
+
+Unified daily meal operations (replaces legacy attendance + menu tables).
+
+<ResponseField name="id_registro" type="SERIAL PRIMARY KEY">
+  Unique record identifier
+</ResponseField>
+
+<ResponseField name="fecha" type="DATE NOT NULL">
+  Operation date
+</ResponseField>
+
+<ResponseField name="turno" type="TEXT NOT NULL">
+  Meal shift: Desayuno, Almuerzo, Merienda
+  
+  **Constraint**: `CHECK (turno IN ('Desayuno', 'Almuerzo', 'Merienda'))`
+</ResponseField>
+
+<ResponseField name="asistencia_total" type="INTEGER NOT NULL">
+  Total student attendance
+  
+  **Constraint**: `CHECK (asistencia_total >= 0)`
+</ResponseField>
+
+<ResponseField name="notas" type="TEXT">
+  Additional notes
+</ResponseField>
+
+<ResponseField name="created_by" type="UUID">
+  User who created the record (references `auth.users.id`)
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Constraints:**
+- `UNIQUE(fecha, turno)` - One record per date/shift combination
+
+---
+
+### `receta_porcion` - Product Yield Configuration
+
+Defines portion yield per unit for meal planning calculations.
+
+<ResponseField name="id_porcion" type="SERIAL PRIMARY KEY">
+  Unique portion configuration identifier
+</ResponseField>
+
+<ResponseField name="id_product" type="INTEGER UNIQUE">
+  Product (references `product.id_product`)
+  
+  **Constraint**: One configuration per product
+</ResponseField>
+
+<ResponseField name="rendimiento_por_unidad" type="NUMERIC(10,2)">
+  Portions per unit (e.g., 1 kg rice = 12 portions)
+  
+  **Default**: `1.0`
+</ResponseField>
+
+<ResponseField name="unit_measure" type="TEXT NOT NULL">
+  Unit of measurement
+</ResponseField>
+
+<ResponseField name="notas" type="TEXT">
+  Additional notes or preparation instructions
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Example:**
+- 1 kg arroz → 12 porciones
+- 1 kg leche en polvo → 40 porciones
+- 1 kg pollo → 4 porciones
+
+---
+
+## Legacy Tables
+
+<Warning>
+These tables are maintained for backward compatibility but have been replaced by `registro_diario`. Use the new unified table for all new development.
+</Warning>
+
+### `asistencia_diaria` - Student Attendance (LEGACY)
+
+<ResponseField name="id_asistencia" type="SERIAL PRIMARY KEY">
+  Unique attendance record identifier
+</ResponseField>
+
+<ResponseField name="fecha" type="DATE UNIQUE NOT NULL">
+  Attendance date
+</ResponseField>
+
+<ResponseField name="total_alumnos" type="INTEGER NOT NULL">
+  Total students present
+  
+  **Constraint**: `CHECK (total_alumnos >= 0)`
+</ResponseField>
+
+<ResponseField name="notas" type="TEXT">
+  Notes
+</ResponseField>
+
+<ResponseField name="created_by" type="UUID">
+  User who created the record (references `auth.users.id`)
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+---
+
+### `menu_diario` - Daily Menu (LEGACY)
+
+<ResponseField name="id_menu" type="SERIAL PRIMARY KEY">
+  Unique menu identifier
+</ResponseField>
+
+<ResponseField name="fecha" type="DATE UNIQUE NOT NULL">
+  Menu date
+</ResponseField>
+
+<ResponseField name="id_asistencia" type="INTEGER">
+  Related attendance (references `asistencia_diaria.id_asistencia`)
+</ResponseField>
+
+<ResponseField name="notas" type="TEXT">
+  Menu notes
+</ResponseField>
+
+<ResponseField name="confirmado" type="BOOLEAN">
+  Menu confirmation status
+  
+  **Default**: `FALSE`
+</ResponseField>
+
+<ResponseField name="created_by" type="UUID">
+  User who created the menu (references `auth.users.id`)
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+**Triggers:**
+- `audit_menu` - Logs all operations
+
+---
+
+### `menu_detalle` - Menu Line Items (LEGACY)
+
+<ResponseField name="id_detalle" type="SERIAL PRIMARY KEY">
+  Unique detail identifier
+</ResponseField>
+
+<ResponseField name="id_menu" type="INTEGER">
+  Parent menu (references `menu_diario.id_menu`)
+  
+  **Foreign Key**: ON DELETE CASCADE
+</ResponseField>
+
+<ResponseField name="id_product" type="INTEGER">
+  Product (references `product.id_product`)
+</ResponseField>
+
+<ResponseField name="cantidad_planificada" type="NUMERIC(10,2)">
+  Planned quantity
+</ResponseField>
+
+<ResponseField name="cantidad_real_usada" type="NUMERIC(10,2)">
+  Actually used quantity
+</ResponseField>
+
+<ResponseField name="created_at" type="TIMESTAMPTZ">
+  Creation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+---
+
+## Audit & Logging
+
+### `audit_log` - System Audit Trail
+
+Comprehensive audit trail for all critical operations.
+
+<ResponseField name="id_log" type="SERIAL PRIMARY KEY">
+  Unique log entry identifier
+</ResponseField>
+
+<ResponseField name="id_user" type="UUID">
+  User who performed the action (references `auth.users.id`)
+</ResponseField>
+
+<ResponseField name="action_type" type="TEXT NOT NULL">
+  Action type: INSERT, UPDATE, DELETE, APPROVE, REJECT
+</ResponseField>
+
+<ResponseField name="table_affected" type="TEXT">
+  Table name where action occurred
+</ResponseField>
+
+<ResponseField name="record_id" type="INTEGER">
+  ID of affected record
+</ResponseField>
+
+<ResponseField name="details" type="TEXT">
+  JSON details of the operation (old/new values)
+</ResponseField>
+
+<ResponseField name="timestamp" type="TIMESTAMPTZ">
+  Operation timestamp
+  
+  **Default**: `NOW()`
+</ResponseField>
+
+<ResponseField name="ip_address" type="TEXT">
+  User IP address
+</ResponseField>
+
+**Automatically Populated By:**
+- `log_audit()` trigger function
+- RPC functions (`aprobar_guia`, `rechazar_guia`, etc.)
+
+---
+
+## Entity Relationships
+
+### Key Foreign Key Relationships
+
+```
+users
+  ├─ id_rol → rol.id_rol
+  └─ id_user → auth.users.id (CASCADE)
+
+product
+  └─ id_category → category.id_category
+
+guia_entrada
+  ├─ created_by → users.id_user
+  └─ aprobado_por → users.id_user
+
+input
+  ├─ id_guia → guia_entrada.id_guia (CASCADE)
+  └─ id_product → product.id_product
+
+output
+  ├─ id_product → product.id_product
+  ├─ id_menu → menu_diario.id_menu (LEGACY)
+  ├─ id_registro → registro_diario.id_registro
+  └─ created_by → auth.users.id
+
+registro_diario
+  └─ created_by → auth.users.id
+
+receta_porcion
+  └─ id_product → product.id_product (UNIQUE)
+```
+
+## Sample Data
+
+The schema includes default seed data:
+
+- **4 roles**: Director, Madre Procesadora, Supervisor, Desarrollador
+- **9 categories**: Lacteos, Proteinas, Carbohidratos, etc.
+- **8 sample products**: Arroz, Aceite, Leche, Pollo, etc.
+- **5 portion yields**: Configured for common products
+
+See `supabase_schema.sql` lines 870-888 for complete seed data.

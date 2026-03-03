@@ -1,0 +1,433 @@
+---
+title: School Information
+description: Manage school details, logo, and institutional information
+icon: building
+---
+
+## Overview
+
+The School Information module (`DatosPlantel.jsx`) provides a centralized interface for managing institutional details including school name, RIF, DEA code, address, director name, and institutional logo.
+
+<Warning>
+  **Desarrollador Access Only**: Editing school information is restricted to users with the **Desarrollador** role (id_rol=4). Other users can view the information but cannot make changes.
+</Warning>
+
+## Database Schema
+
+School information is stored in the `institucion` table with a single row (id=1):
+
+```sql
+CREATE TABLE IF NOT EXISTS institucion (
+    id SERIAL PRIMARY KEY,
+    nombre TEXT,
+    rif TEXT,
+    codigo_dea TEXT,
+    direccion TEXT,
+    director_actual TEXT,
+    logo_url TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+## Loading School Data
+
+The component loads data on mount:
+
+```jsx
+const loadInstitucion = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('institucion')
+      .select('*')
+      .eq('id', 1)
+      .single()
+
+    if (error) throw error
+    setInstitucion(data)
+  } catch (error) {
+    console.error('Error cargando datos del plantel:', error)
+  } finally {
+    setLoading(false)
+  }
+}
+```
+
+## Editable Fields
+
+### Institution Name
+
+```jsx
+{editing ? (
+  <input
+    type="text"
+    name="nombre"
+    value={formData.nombre}
+    onChange={handleChange}
+    placeholder="Nombre de la Institución"
+    className="text-2xl font-heading font-bold text-center w-full bg-white border border-gray-300 rounded-lg px-4 py-2"
+  />
+) : (
+  <h1 className="text-2xl font-heading font-bold text-slate-800">
+    {institucion?.nombre || 'Sin nombre'}
+  </h1>
+)}
+```
+
+<Note>
+  The institution name is **required**. The save function validates that it's not empty before proceeding.
+</Note>
+
+### RIF (Tax ID)
+
+```jsx
+<div className="flex items-start gap-3">
+  <Hash className="w-5 h-5 text-pae-peach-dark mt-0.5 flex-shrink-0" />
+  <div className="flex-1">
+    <p className="text-xs text-slate-500 uppercase tracking-wide font-medium">RIF</p>
+    {editing ? (
+      <input
+        type="text"
+        name="rif"
+        value={formData.rif}
+        onChange={handleChange}
+        placeholder="J-XXXXXXXX-X"
+        className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mt-1"
+      />
+    ) : (
+      <p className="text-slate-800 font-medium">{institucion?.rif || '—'}</p>
+    )}
+  </div>
+</div>
+```
+
+### DEA Code
+
+```jsx
+<div className="flex items-start gap-3">
+  <Hash className="w-5 h-5 text-pae-peach-dark mt-0.5 flex-shrink-0" />
+  <div className="flex-1">
+    <p className="text-xs text-slate-500 uppercase tracking-wide font-medium">Código DEA</p>
+    {editing ? (
+      <input
+        type="text"
+        name="codigo_dea"
+        value={formData.codigo_dea}
+        onChange={handleChange}
+        placeholder="Código DEA"
+        className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mt-1"
+      />
+    ) : (
+      <p className="text-slate-800 font-medium">{institucion?.codigo_dea || '—'}</p>
+    )}
+  </div>
+</div>
+```
+
+### Address
+
+```jsx
+<div className="flex items-start gap-3 sm:col-span-2">
+  <MapPin className="w-5 h-5 text-pae-peach-dark mt-0.5 flex-shrink-0" />
+  <div className="flex-1">
+    <p className="text-xs text-slate-500 uppercase tracking-wide font-medium">Dirección</p>
+    {editing ? (
+      <textarea
+        name="direccion"
+        value={formData.direccion}
+        onChange={handleChange}
+        placeholder="Dirección completa del plantel"
+        rows={2}
+        className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mt-1 resize-none"
+      />
+    ) : (
+      <p className="text-slate-800 font-medium">{institucion?.direccion || '—'}</p>
+    )}
+  </div>
+</div>
+```
+
+### Current Director
+
+```jsx
+<div className="flex items-start gap-3 sm:col-span-2">
+  <User className="w-5 h-5 text-pae-peach-dark mt-0.5 flex-shrink-0" />
+  <div className="flex-1">
+    <p className="text-xs text-slate-500 uppercase tracking-wide font-medium">Director(a) Actual</p>
+    {editing ? (
+      <input
+        type="text"
+        name="director_actual"
+        value={formData.director_actual}
+        onChange={handleChange}
+        placeholder="Nombre del Director(a)"
+        className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm mt-1"
+      />
+    ) : (
+      <p className="text-slate-800 font-medium">{institucion?.director_actual || '—'}</p>
+    )}
+  </div>
+</div>
+```
+
+## Logo Management
+
+### Logo Upload
+
+The logo is uploaded to Supabase Storage in the `logos` bucket:
+
+```jsx
+const handleLogoChange = (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    notifyError('Archivo inválido', 'Solo se permiten imágenes (PNG, JPG, etc.)')
+    return
+  }
+  setLogoFile(file)
+  setLogoPreview(URL.createObjectURL(file))
+}
+```
+
+### Logo Storage
+
+When saving, the logo is uploaded first, then the URL is stored in the database:
+
+```jsx
+let logo_url = institucion?.logo_url || ''
+
+if (logoFile) {
+  const fileExt = logoFile.name.split('.').pop() || 'png'
+  const filePath = `logo-${Date.now()}.${fileExt}`
+  const { error: uploadError } = await supabase.storage
+    .from('logos')
+    .upload(filePath, logoFile, { cacheControl: '3600' })
+
+  if (uploadError) throw uploadError
+
+  const { data: urlData } = supabase.storage
+    .from('logos')
+    .getPublicUrl(filePath)
+
+  logo_url = urlData.publicUrl
+}
+```
+
+### Logo Display
+
+In edit mode, clicking the logo allows uploading a new one:
+
+```jsx
+{editing ? (
+  <div className="mb-4">
+    <label className="cursor-pointer group block mx-auto w-32 h-32 relative">
+      {logoPreview || institucion?.logo_url ? (
+        <img
+          src={logoPreview || institucion?.logo_url}
+          alt="Logo"
+          className="w-32 h-32 rounded-2xl object-cover mx-auto border-2 border-dashed border-orange-300 group-hover:opacity-75 transition-opacity"
+        />
+      ) : (
+        <div className="w-32 h-32 rounded-2xl bg-white border-2 border-dashed border-orange-300 flex items-center justify-center mx-auto group-hover:border-orange-400 transition-colors">
+          <Building2 className="w-12 h-12 text-slate-300" />
+        </div>
+      )}
+      <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity">
+        <Upload className="w-6 h-6 text-white" />
+      </div>
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handleLogoChange}
+        className="hidden"
+      />
+    </label>
+    <p className="text-xs text-slate-500 mt-2">Click para cambiar el logo</p>
+  </div>
+) : (
+  <div className="mb-4">
+    {institucion?.logo_url ? (
+      <img
+        src={institucion.logo_url}
+        alt="Logo institucional"
+        className="w-32 h-32 rounded-2xl object-cover mx-auto shadow-sm"
+      />
+    ) : (
+      <div className="w-32 h-32 rounded-2xl bg-white border border-gray-200 flex items-center justify-center mx-auto shadow-sm">
+        <Building2 className="w-12 h-12 text-slate-300" />
+      </div>
+    )}
+  </div>
+)}
+```
+
+<Note>
+  Logo files are validated to ensure they are images. Non-image files will be rejected with an error notification.
+</Note>
+
+## Saving Changes
+
+### Validation
+
+```jsx
+if (!formData.nombre.trim()) {
+  notifyError('Campo requerido', 'El nombre de la institución es obligatorio')
+  return
+}
+```
+
+### Update Operation
+
+```jsx
+const { error } = await supabase
+  .from('institucion')
+  .update({
+    ...formData,
+    logo_url,
+    updated_at: new Date().toISOString()
+  })
+  .eq('id', 1)
+
+if (error) throw error
+
+notifySuccess('Datos actualizados', 'Los datos del plantel se guardaron correctamente')
+setEditing(false)
+setLogoFile(null)
+setLogoPreview(null)
+loadInstitucion()
+```
+
+## Permission Control
+
+Only Desarrollador role can edit:
+
+```jsx
+{editing ? (
+  <div className="flex gap-3 justify-end">
+    <button onClick={cancelEdit} disabled={saving} className="btn btn-secondary flex items-center gap-2">
+      <X className="w-4 h-4" /> Cancelar
+    </button>
+    <button onClick={handleSave} disabled={saving} className="btn btn-primary flex items-center gap-2">
+      <Save className="w-4 h-4" /> {saving ? 'Guardando...' : 'Guardar Cambios'}
+    </button>
+  </div>
+) : (
+  userRole === 4 && (
+    <div className="flex justify-end">
+      <button onClick={startEdit} className="btn btn-primary flex items-center gap-2">
+        <Pencil className="w-4 h-4" /> Editar Datos
+      </button>
+    </div>
+  )
+)}
+```
+
+<Warning>
+  Only users with `id_rol === 4` (Desarrollador) will see the "Editar Datos" button. Other roles can view but not modify school information.
+</Warning>
+
+## Last Updated Timestamp
+
+The footer displays when the information was last updated:
+
+```jsx
+{institucion?.updated_at && (
+  <div className="px-6 py-3 bg-slate-50 border-t border-gray-100 text-center">
+    <p className="text-xs text-slate-400">
+      Última actualización: {new Date(institucion.updated_at).toLocaleDateString('es-VE', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      })}
+    </p>
+  </div>
+)}
+```
+
+## UI Design
+
+The component uses a centered card layout with peach-colored header:
+
+```jsx
+<div className="max-w-2xl mx-auto py-8 px-4">
+  <div className="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
+    {/* Header with logo and name */}
+    <div className="bg-pae-peach-light px-6 py-8 text-center border-b border-orange-100">
+      {/* Logo and name here */}
+    </div>
+
+    {/* Body with fields */}
+    <div className="px-6 py-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* Fields here */}
+      </div>
+      {/* Buttons */}
+    </div>
+
+    {/* Footer with timestamp */}
+  </div>
+</div>
+```
+
+## Form State Management
+
+### Starting Edit Mode
+
+```jsx
+const startEdit = () => {
+  setFormData({
+    nombre: institucion?.nombre || '',
+    rif: institucion?.rif || '',
+    codigo_dea: institucion?.codigo_dea || '',
+    direccion: institucion?.direccion || '',
+    director_actual: institucion?.director_actual || ''
+  })
+  setLogoFile(null)
+  setLogoPreview(null)
+  setEditing(true)
+}
+```
+
+### Canceling Edit Mode
+
+```jsx
+const cancelEdit = () => {
+  setLogoFile(null)
+  setLogoPreview(null)
+  setEditing(false)
+}
+```
+
+### Handling Input Changes
+
+```jsx
+const handleChange = (e) => {
+  const { name, value } = e.target
+  setFormData(prev => ({ ...prev, [name]: value }))
+}
+```
+
+## Storage Requirements
+
+### Logos Bucket
+
+The application requires a Supabase Storage bucket named `logos` with public access:
+
+```sql
+-- Create bucket (run in Supabase SQL Editor)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('logos', 'logos', true);
+```
+
+### Storage Policy
+
+Allow authenticated users to upload:
+
+```sql
+CREATE POLICY "Allow authenticated uploads"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (bucket_id = 'logos');
+```
+
+## Related Documentation
+
+- [User Management](/admin/user-management) - Desarrollador role required for editing
+- [User Roles](/guides/user-roles) - Role-based access control

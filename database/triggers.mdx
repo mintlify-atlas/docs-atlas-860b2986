@@ -1,0 +1,550 @@
+---
+title: 'Triggers and Automation'
+description: 'Database triggers for automation, validation, and audit logging'
+icon: 'bolt'
+---
+
+## Overview
+
+The PAE Inventory System uses PostgreSQL triggers to enforce business rules, maintain data integrity, and provide comprehensive audit trails. All triggers are defined using PL/pgSQL functions.
+
+## Timestamp Management
+
+### update_product_updated_at
+
+Automatically updates the `updated_at` timestamp when product records are modified.
+
+#### Trigger Definition
+
+```sql
+DROP TRIGGER IF EXISTS update_product_updated_at ON product;
+CREATE TRIGGER update_product_updated_at
+    BEFORE UPDATE ON product
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+```
+
+#### Function
+
+```sql
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### Behavior
+
+- **Fires**: BEFORE UPDATE on `product` table
+- **Granularity**: FOR EACH ROW
+- **Action**: Sets `NEW.updated_at` to current timestamp
+
+#### Usage
+
+Automatic - no manual invocation needed:
+
+```typescript
+// updated_at is automatically set
+await supabase
+  .from('product')
+  .update({ stock: 100 })
+  .eq('id_product', 1);
+
+// Check the timestamp
+const { data } = await supabase
+  .from('product')
+  .select('updated_at')
+  .eq('id_product', 1)
+  .single();
+```
+
+---
+
+## User Protection
+
+These triggers enforce role hierarchy and prevent unauthorized user modifications.
+
+### trigger_protect_director
+
+Prevents unauthorized modifications to user accounts, enforcing role hierarchy.
+
+#### Trigger Definition
+
+```sql
+DROP TRIGGER IF EXISTS trigger_protect_director ON users;
+CREATE TRIGGER trigger_protect_director
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_director_users();
+```
+
+#### Function Logic
+
+```sql
+CREATE OR REPLACE FUNCTION protect_director_users()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_actor_role INTEGER;
+BEGIN
+  -- Bypass for heartbeat updates (last_seen, last_ip only)
+  IF OLD.username IS NOT DISTINCT FROM NEW.username
+     AND OLD.full_name IS NOT DISTINCT FROM NEW.full_name
+     AND OLD.id_rol IS NOT DISTINCT FROM NEW.id_rol
+     AND OLD.is_active IS NOT DISTINCT FROM NEW.is_active
+  THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT id_rol INTO v_actor_role FROM users WHERE id_user = auth.uid();
+
+  -- Protection rules...
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+#### Protection Rules
+
+The trigger enforces these constraints:
+
+1. **Self-Modification Blocked**: Users cannot modify their own account via user management
+2. **Desarrollador Protected**: Nobody can modify Desarrollador (role 4) accounts
+3. **Director Peer Protection**: Directors cannot modify other Directors
+4. **Promotion Restricted**: Only Desarrollador can promote users to Director role
+5. **Desarrollador Assignment Blocked**: Desarrollador role can only be assigned directly in database
+
+#### Role Hierarchy
+
+```
+Desarrollador (4)     [Full control, database-only assignment]
+    |
+    v
+Director (1)          [Can manage all except Desarrollador and peer Directors]
+    |
+    v
+Madre Procesadora (2) [Cannot manage users]
+Supervisor (3)        [Cannot manage users]
+```
+
+#### Heartbeat Bypass
+
+The trigger allows updates that **only** modify activity tracking columns:
+- `last_seen`
+- `last_ip`
+- `last_activity`
+
+This prevents heartbeat/presence updates from triggering protection logic.
+
+#### Error Examples
+
+```typescript
+// ❌ Trying to modify own account
+await supabase
+  .from('users')
+  .update({ id_rol: 1 })
+  .eq('id_user', myUserId);
+// Exception: No puede modificar su propia cuenta desde la gestion de usuarios.
+
+// ❌ Non-developer promoting to Director
+await supabase
+  .from('users')
+  .update({ id_rol: 1 })
+  .eq('id_user', otherUserId);
+// Exception: Solo el Desarrollador puede asignar el rol de Director.
+
+// ✅ Heartbeat update (bypasses trigger)
+await supabase
+  .from('users')
+  .update({ last_seen: new Date() })
+  .eq('id_user', myUserId);
+// Success - no other fields modified
+```
+
+---
+
+### trigger_protect_director_insert
+
+Prevents unauthorized creation of Director and Desarrollador accounts.
+
+#### Trigger Definition
+
+```sql
+DROP TRIGGER IF EXISTS trigger_protect_director_insert ON users;
+CREATE TRIGGER trigger_protect_director_insert
+    BEFORE INSERT ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION protect_director_insert();
+```
+
+#### Function Logic
+
+```sql
+CREATE OR REPLACE FUNCTION protect_director_insert()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_actor_role INTEGER;
+BEGIN
+  SELECT id_rol INTO v_actor_role FROM users WHERE id_user = auth.uid();
+
+  IF NEW.id_rol = 4 THEN
+    RAISE EXCEPTION 'El rol de Desarrollador solo se asigna desde la base de datos.';
+  END IF;
+
+  IF NEW.id_rol = 1 AND v_actor_role != 4 THEN
+    RAISE EXCEPTION 'Solo el Desarrollador puede crear usuarios con rol de Director.';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+#### Protection Rules
+
+1. **Desarrollador Assignment Blocked**: Cannot create users with `id_rol = 4` via application
+2. **Director Creation Restricted**: Only Desarrollador (role 4) can create Director accounts
+
+#### Usage
+
+```typescript
+// ❌ Creating Desarrollador account
+await supabase
+  .from('users')
+  .insert({ username: 'dev2', full_name: 'Dev User', id_rol: 4 });
+// Exception: El rol de Desarrollador solo se asigna desde la base de datos.
+
+// ✅ Director creating Madre Procesadora
+await supabase
+  .from('users')
+  .insert({ username: 'madre1', full_name: 'Maria Lopez', id_rol: 2 });
+// Success
+```
+
+---
+
+## Stock Management
+
+### trigger_update_stock_output
+
+Automatically decrements product stock when outputs are created.
+
+#### Trigger Definition
+
+```sql
+DROP TRIGGER IF EXISTS trigger_update_stock_output ON output;
+CREATE TRIGGER trigger_update_stock_output
+    AFTER INSERT ON output
+    FOR EACH ROW
+    EXECUTE FUNCTION update_stock_on_output();
+```
+
+#### Function Logic
+
+```sql
+CREATE OR REPLACE FUNCTION update_stock_on_output()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_stock_actual NUMERIC(10,2);
+BEGIN
+    -- Lock row to prevent race conditions
+    SELECT stock INTO v_stock_actual
+    FROM product
+    WHERE id_product = NEW.id_product
+    FOR UPDATE;
+
+    -- Validate sufficient stock
+    IF v_stock_actual < NEW.amount THEN
+        RAISE EXCEPTION 'Stock insuficiente para el producto %. Stock actual: %, solicitado: %',
+            NEW.id_product, v_stock_actual, NEW.amount;
+    END IF;
+
+    -- Decrement stock
+    UPDATE product
+    SET stock = stock - NEW.amount
+    WHERE id_product = NEW.id_product;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### Behavior
+
+1. **Row Locking**: Uses `SELECT FOR UPDATE` to prevent concurrent stock modifications
+2. **Validation**: Checks `stock >= amount` before decrementing
+3. **Atomic Update**: Decrements `product.stock` by `output.amount`
+4. **Error on Insufficient Stock**: Raises exception if stock would go negative
+
+#### Race Condition Prevention
+
+The `FOR UPDATE` clause ensures transactional safety:
+
+```sql
+-- Transaction 1: Lock acquired
+INSERT INTO output (id_product, amount) VALUES (1, 10);
+  -> SELECT stock FROM product WHERE id_product = 1 FOR UPDATE;
+  -> Stock locked until transaction commits
+
+-- Transaction 2: Must wait
+INSERT INTO output (id_product, amount) VALUES (1, 15);
+  -> Waits for Transaction 1 to complete
+  -> Then checks remaining stock
+```
+
+#### Usage
+
+```typescript
+// Automatic stock deduction
+const { data, error } = await supabase
+  .from('output')
+  .insert({
+    id_product: 1,
+    amount: 5.5,
+    fecha: '2026-03-03',
+    motivo: 'Almuerzo - 150 alumnos'
+  });
+
+if (error) {
+  // Check for insufficient stock
+  if (error.message.includes('Stock insuficiente')) {
+    console.error('Not enough stock available');
+  }
+}
+```
+
+<Warning>
+  This trigger executes **AFTER INSERT**, meaning the output record is created before stock validation. If stock is insufficient, the entire transaction (including output insert) is rolled back.
+</Warning>
+
+---
+
+## Audit Logging
+
+These triggers provide comprehensive change tracking for critical tables.
+
+### Generic Audit Function
+
+All audit triggers use the same function:
+
+```sql
+CREATE OR REPLACE FUNCTION log_audit()
+RETURNS TRIGGER AS $$
+DECLARE
+    record_id_value INTEGER;
+BEGIN
+    record_id_value := NULL;
+
+    -- Extract primary key based on table
+    IF (TG_OP = 'INSERT') THEN
+        IF TG_TABLE_NAME = 'product' THEN
+            record_id_value := NEW.id_product;
+        ELSIF TG_TABLE_NAME = 'guia_entrada' THEN
+            record_id_value := NEW.id_guia;
+        ELSIF TG_TABLE_NAME = 'menu_diario' THEN
+            record_id_value := NEW.id_menu;
+        ELSIF TG_TABLE_NAME = 'output' THEN
+            record_id_value := NEW.id_output;
+        END IF;
+
+        INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+        VALUES (auth.uid(), 'INSERT', TG_TABLE_NAME, record_id_value, row_to_json(NEW)::text);
+        RETURN NEW;
+
+    ELSIF (TG_OP = 'UPDATE') THEN
+        -- Similar logic for UPDATE...
+        INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+        VALUES (auth.uid(), 'UPDATE', TG_TABLE_NAME, record_id_value,
+            'Antes: ' || row_to_json(OLD)::text || ' | Despues: ' || row_to_json(NEW)::text);
+        RETURN NEW;
+
+    ELSIF (TG_OP = 'DELETE') THEN
+        -- Similar logic for DELETE...
+        INSERT INTO audit_log (id_user, action_type, table_affected, record_id, details)
+        RETURN OLD;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+### audit_product
+
+Logs all changes to the `product` table.
+
+```sql
+DROP TRIGGER IF EXISTS audit_product ON product;
+CREATE TRIGGER audit_product 
+    AFTER INSERT OR UPDATE OR DELETE ON product
+    FOR EACH ROW 
+    EXECUTE FUNCTION log_audit();
+```
+
+**Captures**: Product creation, stock changes, name updates, deletions
+
+---
+
+### audit_guia
+
+Logs all changes to entry guides.
+
+```sql
+DROP TRIGGER IF EXISTS audit_guia ON guia_entrada;
+CREATE TRIGGER audit_guia 
+    AFTER INSERT OR UPDATE OR DELETE ON guia_entrada
+    FOR EACH ROW 
+    EXECUTE FUNCTION log_audit();
+```
+
+**Captures**: Guide creation, approval state changes, metadata updates
+
+---
+
+### audit_menu
+
+Logs changes to menu records (legacy table).
+
+```sql
+DROP TRIGGER IF EXISTS audit_menu ON menu_diario;
+CREATE TRIGGER audit_menu 
+    AFTER INSERT OR UPDATE OR DELETE ON menu_diario
+    FOR EACH ROW 
+    EXECUTE FUNCTION log_audit();
+```
+
+**Captures**: Menu creation, confirmation status, modifications
+
+---
+
+### audit_output
+
+Logs all inventory outputs.
+
+```sql
+DROP TRIGGER IF EXISTS audit_output ON output;
+CREATE TRIGGER audit_output 
+    AFTER INSERT OR UPDATE OR DELETE ON output
+    FOR EACH ROW 
+    EXECUTE FUNCTION log_audit();
+```
+
+**Captures**: All stock withdrawals and their reasons
+
+---
+
+## Audit Log Structure
+
+All audit triggers insert into the `audit_log` table:
+
+```sql
+CREATE TABLE audit_log (
+    id_log SERIAL PRIMARY KEY,
+    id_user UUID REFERENCES auth.users(id),
+    action_type TEXT NOT NULL,          -- INSERT, UPDATE, DELETE, APPROVE, REJECT
+    table_affected TEXT,
+    record_id INTEGER,
+    details TEXT,                       -- JSON string of record data
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    ip_address TEXT
+);
+```
+
+### Action Types
+
+| action_type | Source | Description |
+|-------------|--------|-------------|
+| `INSERT` | Triggers | New record created |
+| `UPDATE` | Triggers | Record modified |
+| `DELETE` | Triggers | Record deleted |
+| `APPROVE` | RPC | Guide approved via `aprobar_guia()` |
+| `REJECT` | RPC | Guide rejected via `rechazar_guia()` |
+
+### Details Format
+
+#### INSERT
+```json
+{"id_product":1,"product_name":"Arroz","stock":100,"unit_measure":"kg",...}
+```
+
+#### UPDATE
+```
+Antes: {"stock":100,...} | Despues: {"stock":95,...}
+```
+
+#### DELETE
+```json
+{"id_product":1,"product_name":"Arroz",...}
+```
+
+### Querying Audit Logs
+
+```typescript
+// Get all changes to a specific product
+const { data } = await supabase
+  .from('audit_log')
+  .select('*')
+  .eq('table_affected', 'product')
+  .eq('record_id', 1)
+  .order('timestamp', { ascending: false });
+
+// Get approval history
+const { data: approvals } = await supabase
+  .from('audit_log')
+  .select('*, users!id_user(full_name)')
+  .eq('table_affected', 'guia_entrada')
+  .in('action_type', ['APPROVE', 'REJECT'])
+  .order('timestamp', { ascending: false });
+```
+
+## Performance Considerations
+
+### Trigger Overhead
+
+Triggers add overhead to DML operations:
+
+- **audit_* triggers**: Minimal impact (single INSERT per operation)
+- **update_stock_on_output**: Moderate (additional SELECT + UPDATE with row lock)
+- **protect_director_***: Minimal (only checks user role)
+
+### Optimization Tips
+
+1. **Batch Operations**: Use RPC functions (like `procesar_operacion_diaria`) for bulk operations rather than individual INSERTs
+2. **Audit Log Maintenance**: Periodically archive old audit_log entries
+3. **Index Audit Queries**: Add indexes on commonly queried columns:
+
+```sql
+CREATE INDEX idx_audit_log_table_record 
+    ON audit_log(table_affected, record_id);
+CREATE INDEX idx_audit_log_user_time 
+    ON audit_log(id_user, timestamp DESC);
+```
+
+## Security Model
+
+All trigger functions use `SECURITY DEFINER`, meaning:
+
+- They execute with **creator privileges** (bypass RLS)
+- They can write to `audit_log` even if user has no direct INSERT permission
+- They access `auth.uid()` to identify the acting user
+
+<Info>
+  SECURITY DEFINER is essential for audit triggers since audit_log has restrictive RLS (SELECT only). Triggers must be able to INSERT audit records regardless of user permissions.
+</Info>
+
+## Trigger Execution Order
+
+When multiple triggers fire on the same operation:
+
+1. **BEFORE triggers** (alphabetical by trigger name)
+2. **The actual operation** (INSERT/UPDATE/DELETE)
+3. **AFTER triggers** (alphabetical by trigger name)
+
+For the `output` table:
+
+1. *(no BEFORE triggers)*
+2. INSERT into `output`
+3. `audit_output` (logs the insert)
+4. `trigger_update_stock_output` (decrements stock)
+
+If `trigger_update_stock_output` raises an exception, the entire transaction rolls back, including the output insert and audit log entry.

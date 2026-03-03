@@ -1,0 +1,406 @@
+---
+title: 'Portion Yield Configuration'
+description: 'How to configure how many servings each product yields per unit'
+icon: 'utensils'
+---
+
+## Overview
+
+Portion yield configuration (Porciones) tells the system **how many student servings** you get from 1 kilogram, 1 liter, or 1 unit of each product.
+
+This is essential for automatic inventory calculations in daily operations.
+
+<Note>
+**Required Role:** Director or Madre Procesadora
+
+Supervisors can view portion configurations but cannot create or modify them.
+</Note>
+
+## Why Portion Yields Matter
+
+When you register a daily operation, the system needs to know:
+- **You provide:** 120 students ate lunch today, we cooked Arroz
+- **System needs to know:** How much Arroz to deduct from inventory?
+- **Portion yield provides the answer:** If 1 kg Arroz = 12 portions, then 120 students = 10 kg
+
+### Calculation Formula
+
+```
+Quantity Needed = Student Attendance ÷ Portion Yield
+```
+
+**Example:**
+- Product: Arroz
+- Portion yield: 12 portions per kg
+- Attendance: 120 students
+- Calculation: 120 ÷ 12 = **10 kg of Arroz**
+
+<Warning>
+Products without configured portion yields **cannot be used** in daily operations. The system will not show them in the product selection dropdown.
+</Warning>
+
+## Configuring a Portion Yield
+
+<Steps>
+  <Step title="Navigate to Porciones">
+    Go to **Configuración > Porciones** from the main menu.
+  </Step>
+  
+  <Step title="Click 'Nueva Porción'">
+    Click the **+ Nueva Porción** button in the top-right corner.
+  </Step>
+  
+  <Step title="Select the product">
+    Choose a product from the dropdown. Only products that **don't already have** a portion yield will appear in the list.
+    
+    The unit of measure will auto-populate based on the product's configured unit (kg, lt, or unidades).
+  </Step>
+  
+  <Step title="Enter the portion yield">
+    Enter how many student servings you get from **1 unit** of this product.
+    
+    **Examples:**
+    - Arroz (rice): 1 kg → 12 portions → Enter `12`
+    - Leche en polvo (powdered milk): 1 kg → 40 portions → Enter `40`
+    - Pollo (chicken): 1 kg → 4 portions → Enter `4`
+    - Caraotas (beans): 1 kg → 10 portions → Enter `10`
+    - Aceite (oil): 1 lt → 50 portions → Enter `50`
+  </Step>
+  
+  <Step title="Add notes (optional)">
+    Use the notes field to document:
+    - How the yield was calculated
+    - Special preparation instructions
+    - Source of the yield estimate
+    
+    Example: "Calculado con 100g de arroz crudo por niño"
+  </Step>
+  
+  <Step title="Save the configuration">
+    Click **Guardar**. The portion yield is now configured and this product can be used in daily operations.
+  </Step>
+</Steps>
+
+## Example from Code (Porciones.jsx:91-128)
+
+```javascript
+const handleSubmit = async (e) => {
+  e.preventDefault()
+  setLoading(true)
+
+  try {
+    const dataToSubmit = {
+      id_product: parseInt(formData.id_product),
+      rendimiento_por_unidad: parseFloat(formData.rendimiento_por_unidad),
+      unit_measure: formData.unit_measure,
+      notas: formData.notas
+    }
+
+    if (editingPorcion) {
+      const { error } = await supabase
+        .from('receta_porcion')
+        .update(dataToSubmit)
+        .eq('id_porcion', editingPorcion.id_porcion)
+
+      if (error) throw error
+      notifySuccess('Actualizado', 'Porción actualizada correctamente')
+    } else {
+      const { error } = await supabase
+        .from('receta_porcion')
+        .insert(dataToSubmit)
+
+      if (error) throw error
+      notifySuccess('Configurado', 'Porción configurada correctamente')
+    }
+
+    resetForm()
+    loadPorciones()
+  } catch (error) {
+    console.error('Error guardando porción:', error)
+    notifyError('Error al guardar', error.message)
+  } finally {
+    setLoading(false)
+  }
+}
+```
+
+## Viewing Configured Portions
+
+The Porciones page displays a table with:
+
+| Column | Description |
+|--------|-------------|
+| Rubro | Product name |
+| Rendimiento (porciones) | How many servings per unit (e.g., "12 porciones / kg") |
+| Ejemplo de cálculo | Real-world calculation using recent attendance data |
+| Notas | Additional notes about the yield |
+| Acciones | Edit/Delete buttons (Director/Madre Procesadora only) |
+
+### Example Calculation Column
+
+If the system has a recent attendance record, it shows:
+
+```
+Para 120 alumnos:
+10.00 kg
+```
+
+This helps verify the portion yield makes sense for your school's serving sizes.
+
+### Code for Example Calculation (Porciones.jsx:302-307)
+
+```javascript
+const alumnosEjemplo = ultimaAsistencia || 0
+const cantidadNecesaria = alumnosEjemplo > 0
+  ? (alumnosEjemplo / porcion.rendimiento_por_unidad).toFixed(2)
+  : '-'
+```
+
+## Updating a Portion Yield
+
+<Steps>
+  <Step title="Click 'Editar' (pencil icon)">
+    Locate the product in the table and click the Edit button.
+  </Step>
+  
+  <Step title="Modify the yield">
+    Update the "Rendimiento (porciones)" field with the new value.
+    
+    You **cannot change** the product itself - only the yield number and notes.
+  </Step>
+  
+  <Step title="Save changes">
+    Click **Guardar**. The new yield will be used for all future daily operations.
+  </Step>
+</Steps>
+
+<Info>
+Updating a portion yield only affects **future** operations. Past operations retain the yield that was used at the time they were created.
+</Info>
+
+## Deleting a Portion Configuration
+
+<Note>
+**Required Role:** Director or Madre Procesadora
+</Note>
+
+<Steps>
+  <Step title="Click the delete button (trash icon)">
+    Locate the product and click the trash icon.
+  </Step>
+  
+  <Step title="Confirm deletion">
+    Confirm in the dialog that appears.
+  </Step>
+</Steps>
+
+<Warning>
+Deleting a portion configuration means this product **can no longer be used** in new daily operations until you reconfigure it.
+
+Existing operations that already used this product are not affected.
+</Warning>
+
+## Database Structure (supabase_schema.sql:116-123)
+
+```sql
+CREATE TABLE IF NOT EXISTS receta_porcion (
+    id_porcion SERIAL PRIMARY KEY,
+    id_product INTEGER REFERENCES product(id_product) UNIQUE,  -- ← One yield per product
+    rendimiento_por_unidad NUMERIC(10,2) NOT NULL DEFAULT 1.0,
+    unit_measure TEXT NOT NULL,
+    notas TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Key constraints:**
+- Each product can have **only one** portion yield (UNIQUE constraint)
+- Yield must be a positive number
+- Unit of measure must match product's unit
+
+## How Portion Yields Are Used
+
+When you create a daily operation, the system:
+
+1. **Retrieves the yield** from `receta_porcion` table
+2. **Calculates quantity needed** = attendance ÷ yield
+3. **Validates sufficient stock** before allowing submission
+4. **Consumes FIFO batches** for the calculated quantity
+
+### Yield Retrieval (supabase_schema.sql:608-615)
+
+```sql
+-- Get portion yield
+SELECT rendimiento_por_unidad INTO v_rendimiento
+FROM receta_porcion WHERE id_product = v_rubro_id;
+
+IF v_rendimiento IS NULL OR v_rendimiento <= 0 THEN
+  SELECT product_name INTO v_product_name FROM product WHERE id_product = v_rubro_id;
+  RAISE EXCEPTION 'El rubro "%" no tiene rendimiento configurado.', v_product_name;
+END IF;
+```
+
+### Quantity Calculation (supabase_schema.sql:617-618)
+
+```sql
+v_cantidad_necesaria := ROUND(p_asistencia::NUMERIC / v_rendimiento, 2);
+v_restante := v_cantidad_necesaria;
+```
+
+## Example Portion Yields (supabase_schema.sql:882-888)
+
+The system includes sample portion yields for common products:
+
+```sql
+INSERT INTO receta_porcion (id_product, rendimiento_por_unidad, unit_measure) VALUES
+    (1, 12.00, 'kg'),  -- 1 kg arroz = 12 porciones
+    (3, 40.00, 'kg'),  -- 1 kg leche = 40 porciones
+    (4, 4.00, 'kg'),   -- 1 kg pollo = 4 porciones
+    (5, 10.00, 'kg'),  -- 1 kg caraotas = 10 porciones
+    (6, 10.00, 'kg')   -- 1 kg pasta = 10 porciones
+ON CONFLICT DO NOTHING;
+```
+
+These are examples only - adjust based on your school's actual serving sizes.
+
+## Determining Portion Yields
+
+<AccordionGroup>
+  <Accordion title="Method 1: Weight-based calculation">
+    Measure the weight per serving, then calculate:
+    
+    **Formula:** Yield = 1000g ÷ grams per serving
+    
+    **Example:**
+    - Rice serving: 100g per student
+    - Calculation: 1000g ÷ 100g = 10 portions per kg
+    - Enter: `10`
+  </Accordion>
+  
+  <Accordion title="Method 2: Volume-based calculation">
+    For liquids, measure the volume per serving:
+    
+    **Formula:** Yield = 1000ml ÷ ml per serving
+    
+    **Example:**
+    - Milk serving: 200ml per student
+    - Calculation: 1000ml ÷ 200ml = 5 portions per liter
+    - Enter: `5`
+  </Accordion>
+  
+  <Accordion title="Method 3: Historical observation">
+    Cook a meal and record:
+    - Amount used (e.g., 20 kg of rice)
+    - Students served (e.g., 240 students)
+    - Calculation: 240 ÷ 20 = 12 portions per kg
+    - Enter: `12`
+  </Accordion>
+  
+  <Accordion title="Method 4: Nutritional guidelines">
+    Use official dietary guidelines for school meals:
+    - Check government recommendations
+    - Ask a nutritionist
+    - Reference PAE (Programa de Alimentación Escolar) standards
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Configure yields before the school year starts">
+    Set up all portion yields during planning/setup time, not during busy meal service periods.
+  </Accordion>
+  
+  <Accordion title="Document your calculations">
+    Use the "Notas" field to record:
+    - How you determined the yield
+    - Date it was calculated
+    - Any special considerations
+    
+    Example: "100g arroz crudo por niño, calculado 2026-02-15"
+  </Accordion>
+  
+  <Accordion title="Review yields periodically">
+    Every few months, verify that yields still match actual usage:
+    1. Compare inventory consumption to meals served
+    2. Adjust yields if consistently over/under-consuming
+    3. Update notes with the date of review
+  </Accordion>
+  
+  <Accordion title="Be conservative with new products">
+    When adding a new product, start with a conservative (lower) yield estimate. It's better to have leftover stock than run out mid-service.
+  </Accordion>
+  
+  <Accordion title="Use consistent units">
+    Make sure the unit_measure in the portion configuration matches the product's unit:
+    - Rice product: kg → portion yield should be per kg
+    - Oil product: lt → portion yield should be per liter
+  </Accordion>
+</AccordionGroup>
+
+## Common Portion Yield Ranges
+
+Typical yields for common products:
+
+| Product Type | Typical Yield | Notes |
+|--------------|---------------|-------|
+| Grains (rice, pasta) | 8-12 portions/kg | Depends on age group and serving size |
+| Proteins (meat, chicken) | 3-5 portions/kg | Raw weight before cooking |
+| Legumes (beans, lentils) | 8-12 portions/kg | Dry weight |
+| Powdered milk | 30-50 portions/kg | Depends on dilution ratio |
+| Oil | 40-60 portions/lt | Small amounts used per serving |
+| Vegetables | 4-8 portions/kg | Varies by type and preparation |
+
+<Tip>
+These are general guidelines. Your actual yields depend on:
+- Student age group (younger children eat less)
+- Meal type (breakfast vs. lunch)
+- Recipe preparation method
+- Local dietary customs
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Product doesn't appear in dropdown">
+    **Cause:** The product already has a portion yield configured.
+    
+    **Solution:** Each product can only have one yield. If you need to change it, edit the existing yield instead of creating a new one.
+  </Accordion>
+  
+  <Accordion title="Can't use product in daily operations">
+    **Cause:** The product doesn't have a configured portion yield.
+    
+    **Solution:** Go to Porciones and configure the yield before trying to use it in Registro Diario.
+  </Accordion>
+  
+  <Accordion title="Calculations seem wrong">
+    **Cause:** Portion yield may be set incorrectly.
+    
+    **Solution:**
+    1. Check the "Ejemplo de cálculo" column
+    2. Verify it makes sense for your serving sizes
+    3. Edit the yield if needed
+    4. Document the change in the notes field
+  </Accordion>
+  
+  <Accordion title="No example calculation showing">
+    **Cause:** No recent attendance data in the system.
+    
+    **Solution:** This is normal if you haven't created any daily operations yet. The example will appear once you register your first operation.
+  </Accordion>
+</AccordionGroup>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Daily Operations" icon="calendar-check" href="/guides/daily-attendance">
+    How portion yields are used to calculate inventory consumption
+  </Card>
+  <Card title="Managing Products" icon="box" href="/guides/managing-products">
+    Create products before configuring their yields
+  </Card>
+  <Card title="FIFO System" icon="layer-group" href="/guides/fifo-system">
+    How consumed quantities are deducted from batches
+  </Card>
+</CardGroup>
